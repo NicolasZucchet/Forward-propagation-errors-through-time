@@ -14,9 +14,17 @@ from functools import partial
 jax.config.update("jax_enable_x64", True)
 
 
+def chrono_init(key, shape, dtype=jnp.float32, T_min=1.0, T_max=10.0):
+    if T_min is None or T_max is None:
+        return jnp.zeros(shape, dtype=dtype)
+    return jnp.log(jax.random.uniform(key, shape, dtype=dtype, minval=T_min, maxval=T_max))
+
+
 class GRUCell(nn.Module):
     hidden_dim: int
     output_dim: int
+    T_min: float = None
+    T_max: float = None
 
     def setup(self):
         dense_h = partial(
@@ -29,7 +37,9 @@ class GRUCell(nn.Module):
             features=self.hidden_dim,
             use_bias=True,
         )
-        self.dense_iz = dense_i(name="iz")
+        self.dense_iz = dense_i(
+            name="iz", bias_init=partial(chrono_init, T_min=self.T_min, T_max=self.T_max)
+        )
         self.dense_hz = dense_h(name="hz")
         self.dense_ir = dense_i(name="ir")
         self.dense_hr = dense_h(name="hr")
@@ -221,5 +231,3 @@ class ForwardBPTTRNN(nn.Module):
 
         custom_f = nn.custom_vjp(fn=f, forward_fn=fwd, backward_fn=bwd)
         return custom_f(rnn, inputs, targets)
-
-
