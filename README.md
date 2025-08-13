@@ -10,9 +10,20 @@ This repository contains the code for the paper "Online Backpropagation-Through-
     ```
 2. Create a virtual environment
     ```bash
-    uv venv
+    uv venv env
     ```
-3. Install the dependencies
+3. Activate the virtual env
+    ```bash
+    source env/bin/activate
+    ```
+4. Install the dependencies
     ```bash
     uv pip install -e .
     ```
+
+## Running Tests
+
+Run pytest from the root of the project:
+```bash
+uv run pytest
+```

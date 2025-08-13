@@ -1,11 +1,16 @@
 [project]
-name = "env"
+name = "online-bptt"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "flax>=0.10.7",
-    "jax[cuda12]>=0.6.2",
-    "optax>=0.2.5",
+    "flax==0.8.4",
+    "jax[cuda12]==0.4.26",
+    "optax==0.2.2",
+    "pytest>=8.4.1",
 ]
+
+[tool.setuptools]
+packages = ["online_bptt"]
+
