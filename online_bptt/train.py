@@ -74,7 +74,12 @@ def main(cfg: DictConfig) -> None:
 
     # Instantiate model
     assert cfg.model.training_mode in ["normal", "forward_bptt"]
-    cell_type = partial(GRUCell, T_min=seq_len, T_max=seq_len * 2, dtype=dtype)
+    cell_type = partial(
+        GRUCell, 
+        T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
+        T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
+        dtype=dtype
+    )  # Long time scales to give forward BPTT a chance
     BatchedRNN = nn.vmap(
         partial(StandardRNN, cell_type=cell_type, dtype=dtype),
         in_axes=0,
@@ -85,6 +90,7 @@ def main(cfg: DictConfig) -> None:
     key, init_key = jax.random.split(key)
     batched_model = BatchedRNN(hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype)
     params = batched_model.init(init_key, dummy_batch["input"])["params"]
+
     if cfg.model.training_mode == "forward_bptt":
         # Overwrite the model to use the correct one, and convert parameters
         model = partial(

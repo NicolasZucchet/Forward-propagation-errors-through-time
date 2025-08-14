@@ -6,12 +6,14 @@ data:
   n_samples: 200000
   seq_len: 4
   bit_width: 1
-  waiting_time: 0
+  waiting_time: 16
 
 model:
   training_mode: "normal"
   hidden_dim: 64
   precision: "float32"
+  T_min_frac: 1.0
+  T_max_frac: 2.0
 
 training:
   scheduler: "cosine"

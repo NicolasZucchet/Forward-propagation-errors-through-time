@@ -104,7 +104,7 @@ def multi_bit_accuracy(pred, target, mask):
 def create_dataloader(task, batch_size, n_samples, seed, **kwargs):
     if task == "copy":
         sample_fn = partial(sample_copy_task, **kwargs)
-        loss_fn = lambda x, y, m: multi_bit_bce_loss(x, y, m) / kwargs['seq_len']
+        loss_fn = lambda x, y, m: multi_bit_bce_loss(x, y, m) / kwargs['seq_len'] / batch_size
         accuracy_fn = multi_bit_accuracy
     else:
         raise ValueError(f"Unknown task: {task}")
