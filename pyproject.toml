@@ -12,6 +12,7 @@ dependencies = [
     "omegaconf",
     "tqdm",
     "hydra-core",
+    "wandb",
 ]
 
 [tool.setuptools]

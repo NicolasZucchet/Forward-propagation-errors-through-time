@@ -253,3 +253,10 @@ class ForwardBPTTRNN(nn.Module):
 
         custom_f = nn.custom_vjp(fn=f, forward_fn=fwd, backward_fn=bwd)
         return custom_f(rnn, inputs, targets, masks)
+
+
+def conversion_params_normal_to_forwardbptt(params: dict) -> dict:
+    """
+    Convert parameters from StandardRNN to ForwardBPTTRNN format.
+    """
+    return {"ScanForwardBPTTCell_0": {"GRUCell_0": params["ScanGRUCell_0"]}}
