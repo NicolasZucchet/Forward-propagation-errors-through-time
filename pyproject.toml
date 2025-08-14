@@ -9,6 +9,9 @@ dependencies = [
     "jax[cuda12]==0.4.26",
     "optax==0.2.2",
     "pytest>=8.4.1",
+    "omegaconf",
+    "tqdm",
+    "hydra-core",
 ]
 
 [tool.setuptools]

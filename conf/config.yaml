@@ -1,0 +1,19 @@
+seed: 42
+
+data:
+  task: "copy"
+  batch_size: 64
+  n_samples: 200000
+  seq_len: 4
+  bit_width: 1
+  waiting_time: 0
+
+model:
+  training_mode: "normal"
+  hidden_dim: 64
+  precision: "float32"
+
+training:
+  scheduler: "cosine"
+  learning_rate: 3e-4
+  log_every_steps: 100
