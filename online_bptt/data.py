@@ -11,7 +11,7 @@ def sample_copy_task(
     seq_len: int = 10,
     bit_width: int = 3,
     waiting_time: int = 0,
-    output_dim: int = 3,
+    n_classes: int = 3,
 ):
     """
     Sample one copy task sequence with bit-encoded memorization sequence
@@ -22,7 +22,7 @@ def sample_copy_task(
         seq_len: Length of the sequence to copy
         bit_width: Number of bits per element in sequence to memorize
         waiting_time: Number of padding tokens between delimiter and target
-        output_dim: Output dimension (not used in this task, but required for compatibility)
+        n_classes: Output dimension (not used in this task, but required for compatibility)
 
     Returns:
         Dictionary containing:
@@ -30,7 +30,7 @@ def sample_copy_task(
         - 'target': Target sequence (bits only during target positions)
         - 'mask': Binary mask indicating valid positions for loss computation
     """
-    assert output_dim == bit_width
+    assert n_classes == bit_width
 
     # Sample random bit sequence to copy
     seq_to_copy_bits = random.randint(key, shape=(seq_len, bit_width), minval=0, maxval=2).astype(
@@ -146,7 +146,7 @@ class DatasetDataLoader:
 
 def create_dataloader(task, batch_size, n_samples, seed, **kwargs):
     if task == "copy":
-        _args = {k: kwargs[k] for k in ["seq_len", "bit_width", "waiting_time", "output_dim"]}
+        _args = {k: kwargs[k] for k in ["seq_len", "bit_width", "waiting_time", "n_classes"]}
         sample_fn = partial(sample_copy_task, **_args)
         dataloader = DataLoader(sample_fn, batch_size, n_samples, seed)
     elif task == "mnist":
