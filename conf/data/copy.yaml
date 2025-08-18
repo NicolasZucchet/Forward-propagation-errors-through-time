@@ -1,0 +1,10 @@
+# @package _group_
+
+data:
+  task: "copy"
+  batch_size: 64
+  n_samples: 200000
+  seq_len: 4
+  bit_width: 1
+  waiting_time: 16
+

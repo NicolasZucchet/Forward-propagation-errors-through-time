@@ -1,12 +1,8 @@
-seed: 42
+defaults:
+  - data: copy
+  - _self_
 
-data:
-  task: "copy"
-  batch_size: 64
-  n_samples: 200000
-  seq_len: 4
-  bit_width: 1
-  waiting_time: 16
+seed: 42
 
 model:
   training_mode: "normal"
