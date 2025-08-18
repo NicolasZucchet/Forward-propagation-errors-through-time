@@ -1,10 +1,14 @@
 # @package _group_
 
-data:
-  task: "copy"
-  batch_size: 64
-  n_samples: 200000
-  seq_len: 4
-  bit_width: 1
-  waiting_time: 16
-
+task: "copy"
+batch_size: 64
+n_samples: 200000
+seq_len: 4
+bit_width: 1
+output_dim: 1  # must match the bit width
+waiting_time: 16
+# don't touch the following
+classification: false
+multiple_pred_per_timestep: true
+dense_prediction: true
+  

@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax import random
 import chex
 from functools import partial
+import tensorflow_datasets as tfds
 
 
 def sample_copy_task(
@@ -10,6 +11,7 @@ def sample_copy_task(
     seq_len: int = 10,
     bit_width: int = 3,
     waiting_time: int = 0,
+    output_dim: int = 3,
 ):
     """
     Sample one copy task sequence with bit-encoded memorization sequence
@@ -20,6 +22,7 @@ def sample_copy_task(
         seq_len: Length of the sequence to copy
         bit_width: Number of bits per element in sequence to memorize
         waiting_time: Number of padding tokens between delimiter and target
+        output_dim: Output dimension (not used in this task, but required for compatibility)
 
     Returns:
         Dictionary containing:
@@ -27,6 +30,8 @@ def sample_copy_task(
         - 'target': Target sequence (bits only during target positions)
         - 'mask': Binary mask indicating valid positions for loss computation
     """
+    assert output_dim == bit_width
+
     # Sample random bit sequence to copy
     seq_to_copy_bits = random.randint(key, shape=(seq_len, bit_width), minval=0, maxval=2).astype(
         jnp.float32
@@ -67,6 +72,36 @@ def sample_copy_task(
     }
 
 
+class MNISTDataset:
+    def __init__(self, split):
+        dataset = tfds.load("mnist", split=split)
+        self.data = []
+        self.labels = []
+        for example in dataset:
+            self.data.append(example["image"])
+            self.labels.append(example["label"])
+        self.data = jnp.array(self.data)
+        self.labels = jnp.array(self.labels)
+
+        # Flatten inputs
+        self.data = self.data.reshape(self.data.shape[0], -1, 1).astype(jnp.float32)
+
+        # Have one label per time step
+        self.labels = self.labels.reshape(-1, 1)  # Shape: (N, 1)
+        self.labels = jnp.repeat(self.labels, self.data.shape[1], axis=1)  # Shape: (N, T)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        print("data", self.data[idx].shape, self.labels[idx].shape)
+        return {
+            "input": self.data[idx],
+            "target": self.labels[idx],
+            "mask": jnp.ones_like(self.data[idx])[:, :, 0],
+        }
+
+
 class DataLoader:
     def __init__(self, sample_fn, batch_size, n_samples, seed):
         self.sample_fn = jax.jit(sample_fn)
@@ -83,30 +118,41 @@ class DataLoader:
         return self.n_samples // self.batch_size
 
 
-def mse_loss(pred, target, mask):
-    return mask * jnp.mean((pred - target) ** 2)
+class DatasetDataLoader:
+    """Dataloader which iterates for multiple epochs over the dataset."""
 
+    def __init__(self, dataset, batch_size, n_samples, seed):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.n_samples = n_samples
+        self.key = random.PRNGKey(seed)
 
-def multi_bit_bce_loss(pred, target, mask):
-    # pred: [N], target: [N], {0, 1}, mask: []
-    # Binary cross-entropy with logits
-    bce = target * jax.nn.log_sigmoid(pred) + (1 - target) * jax.nn.log_sigmoid(-pred)
-    return -jnp.sum(mask * bce)
+    def __iter__(self):
+        i = 0
+        while i < self.n_samples:
+            # One epoch
+            key, self.key = random.split(self.key)
+            batch_indices = random.permutation(key, jnp.arange(len(self.dataset)))
+            for j in range(0, len(self.dataset), self.batch_size):
+                batch = batch_indices[j : j + self.batch_size]
+                i += self.batch_size
+                yield self.dataset[batch]
 
-
-def multi_bit_accuracy(pred, target, mask):
-    # pred: [N], target: [N], {0, 1}, mask: []
-    pred_labels = (pred > 0).astype(jnp.float32)  # Get binary predictions from logits
-    correct = jnp.sum(mask * (pred_labels == target))
-    return correct / target.shape[-1]
+    def __len__(self):
+        epochs_size = len(self.dataset) // self.batch_size
+        n_epochs = jnp.ceil(self.n_samples / len(self.dataset)).astype(int)
+        return n_epochs * epochs_size
 
 
 def create_dataloader(task, batch_size, n_samples, seed, **kwargs):
     if task == "copy":
-        sample_fn = partial(sample_copy_task, **kwargs)
-        loss_fn = lambda x, y, m: multi_bit_bce_loss(x, y, m) / kwargs['seq_len'] / batch_size
-        accuracy_fn = multi_bit_accuracy
+        _args = {k: kwargs[k] for k in ["seq_len", "bit_width", "waiting_time", "output_dim"]}
+        sample_fn = partial(sample_copy_task, **_args)
+        dataloader = DataLoader(sample_fn, batch_size, n_samples, seed)
+    elif task == "mnist":
+        dataset = MNISTDataset(split="train")
+        dataloader = DatasetDataLoader(dataset, batch_size, n_samples, seed)
     else:
         raise ValueError(f"Unknown task: {task}")
 
-    return DataLoader(sample_fn, batch_size, n_samples, seed), loss_fn, accuracy_fn
+    return dataloader

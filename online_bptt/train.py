@@ -17,6 +17,7 @@ from online_bptt.model import (
     GRUCell,
     conversion_params_normal_to_forwardbptt,
 )
+from online_bptt import metrics
 
 
 @partial(jax.jit, static_argnums=(0, 1, 2, 3))
@@ -54,31 +55,33 @@ def main(cfg: DictConfig) -> None:
         dtype = jnp.float32
 
     # Create dataloader
-    dataloader, loss_fn, accuracy_fn = create_dataloader(
+    dataloader = create_dataloader(
         task=cfg.data.task,
         batch_size=cfg.data.batch_size,
         n_samples=cfg.data.n_samples,
         seed=cfg.seed,
-        seq_len=cfg.data.seq_len,
-        bit_width=cfg.data.bit_width,
-        waiting_time=cfg.data.waiting_time,
+        **{k: v for k, v in cfg.data.items() if k not in ["task", "batch_size", "n_samples"]},
+    )
+    full_accuracy_fn, loss_fn = metrics.select_metrics(
+        cfg.data.classification,
+        cfg.data.multiple_pred_per_timestep,
+        cfg.data.dense_prediction,
     )
     dummy_batch = next(iter(dataloader))
     dummy_batch = jax.tree.map(lambda x: x.astype(dtype), dummy_batch)
-    output_dim = dummy_batch["target"].shape[-1]
+    output_dim = cfg.data.n_classes if cfg.data.classification else cfg.data.output_dim
     seq_len = dummy_batch["input"].shape[-2]
     n_train_steps = len(dataloader)
 
-    full_loss_fn = lambda x, y, m: jax.vmap(jax.vmap(loss_fn))(x, y, m).sum()
-    full_accuracy_fn = lambda x, y, m: jax.vmap(jax.vmap(accuracy_fn))(x, y, m).sum() / m.sum()
+    full_loss_fn = lambda x, y, m: jax.vmap(jax.vmap(loss_fn))(x, y, m).sum() / m.sum()
 
     # Instantiate model
     assert cfg.model.training_mode in ["normal", "forward_bptt"]
     cell_type = partial(
-        GRUCell, 
+        GRUCell,
         T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
         T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
-        dtype=dtype
+        dtype=dtype,
     )  # Long time scales to give forward BPTT a chance
     BatchedRNN = nn.vmap(
         partial(StandardRNN, cell_type=cell_type, dtype=dtype),

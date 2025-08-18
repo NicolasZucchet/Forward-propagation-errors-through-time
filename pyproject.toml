@@ -13,6 +13,8 @@ dependencies = [
     "tqdm",
     "hydra-core",
     "wandb",
+    "tensorflow-datasets",
+    "tensorflow",
 ]
 
 [tool.setuptools]
