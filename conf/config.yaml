@@ -6,6 +6,7 @@ seed: 42
 
 model:
   training_mode: "normal"
+  approx_inverse: false  # For forward BPTT
   hidden_dim: 64
   precision: "float32"
   T_min_frac: 1.0

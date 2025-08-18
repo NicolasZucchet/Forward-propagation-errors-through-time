@@ -98,7 +98,13 @@ def main(cfg: DictConfig) -> None:
         # Overwrite the model to use the correct one, and convert parameters
         model = partial(
             ForwardBPTTRNN,
-            cell=partial(ForwardBPTTCell, cell_type=cell_type, loss_fn=loss_fn, dtype=dtype),
+            cell=partial(
+                ForwardBPTTCell,
+                cell_type=cell_type,
+                loss_fn=loss_fn,
+                dtype=dtype,
+                approx_inverse=cfg.model.approx_inverse,
+            ),
             dtype=dtype,
             two_passes=cfg.model.training_mode == "forward_forward",
         )

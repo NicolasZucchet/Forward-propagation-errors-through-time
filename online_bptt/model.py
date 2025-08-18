@@ -99,6 +99,7 @@ class ForwardBPTTCell(nn.Module):
     loss_fn: Callable
     cell_type: nn.Module = GRUCell
     dtype: Any = jnp.float32
+    approx_inverse: bool = False  # Use approximate inverse for delta update
 
     @nn.compact
     def __call__(self, carry: Any, inputs: jnp.ndarray):
@@ -122,7 +123,17 @@ class ForwardBPTTCell(nn.Module):
 
         # New delta: delta_t+1 = (J_t^T)^{-1} (delta_t - inst_delta_t)
         # NOTE: it requires the instantaneous delta computed in the previous iteration!
-        new_delta = jnp.linalg.inv(jacobian) @ (delta - inst_delta)  # [H], reverse BPTT update
+        # Depending on the approx_inverse flag, either compute the exact inverse or an approximation
+        if not self.approx_inverse:
+            new_delta = jnp.linalg.inv(jacobian) @ (delta - inst_delta)  # [H], reverse BPTT update
+        else:
+            # Approximate the inverse Jacobian assuming it is close to identity
+            # (J_t^T)^{-1} = (Id + (J_t^T - Id))^{-1} ~ 2Id - J_t^T
+            new_delta = 2 * (delta - inst_delta) - jacobian @ (delta - inst_delta)  # [H]
+
+            # TODO: more fancy approximations could be used like Newton-Schulz
+            # In principle it would only require jvps, although we need the full jacobian to compute
+            # delta_0
 
         # We compute the instantaneous delta for the next iteration as information is available now
         new_inst_delta = jax.grad(lambda _h: self.loss_fn(cell.readout(_h), y, m))(new_h)  # [H]
