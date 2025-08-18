@@ -154,6 +154,7 @@ class ForwardBPTTRNN(nn.Module):
     output_dim: int
     cell: nn.Module = ForwardBPTTCell
     dtype: Any = jnp.float32
+    two_passes: bool = True  # start with non zero, correct delta_0
 
     @nn.compact
     def __call__(self, batch):
@@ -187,25 +188,32 @@ class ForwardBPTTRNN(nn.Module):
             return out
 
         def fwd(module, x, y, m):
-            # Step 1: run extended forward pass starting from the initial carry.
             init_carry = rnn.initialize_carry(None, None)
-            final_carry, _ = module(init_carry, (x, y, m))
+            if self.two_passes:
+                # Step 1: run extended forward pass starting from the initial carry.
+                final_carry, _ = module(init_carry, (x, y, m))
 
-            # Step 2: compute the new initial carry (in particular delta) and perform the second pass
-            _, final_delta, last_inst_delta, final_prod_jac = final_carry
-            # We use that:
-            #   1. delta_t - delta_t^BP = -prod_t' J_t'^{-T} delta_0^BP
-            #   2. delta_T^BP = inst_delta_T
-            # So that
-            # delta_0^BP = - (prod_t' J_t'^T) (delta_T - inst_delta_T)
-            new_delta = -final_prod_jac @ (final_delta - last_inst_delta)
+                # Step 2: compute the new initial carry (in particular delta) and perform the second pass
+                _, final_delta, last_inst_delta, final_prod_jac = final_carry
+                # We use that:
+                #   1. delta_t - delta_t^BP = -prod_t' J_t'^{-T} delta_0^BP
+                #   2. delta_T^BP = inst_delta_T
+                # So that
+                # delta_0^BP = - (prod_t' J_t'^T) (delta_T - inst_delta_T)
+                delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
 
-            new_carry = (init_carry[0], new_delta, init_carry[2], init_carry[3])
+            else:
+                # Just start directly at 0. NOTE: this will not yield the true gradient
+                delta_0 = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
+
+            new_carry = (init_carry[0], delta_0, init_carry[2], init_carry[3])
             final_carry, out = module(new_carry, (x, y, m))
 
-            # Check that after the second pass, the final delta matches with the one of BPTT, that
-            # is the final instantaneous delta.
+            # To check wether that after the second pass, the final delta matches with the one of
+            # BPTT, that is the final instantaneous delta.
             residual_error = final_carry[1] - final_carry[2]  # Useful for debugging
+            residual_error_delta = jnp.linalg.norm(residual_error)
+            norm_prod_jac = jnp.linalg.norm(final_carry[3])
 
             # Step 3: get the JVP function to do error -> delta mapping. Use the vanilla cell for that.``
             def _fn(p):
@@ -217,9 +225,9 @@ class ForwardBPTTRNN(nn.Module):
             # Gather some additional logging information
             fn_out = {
                 "output": out["output"],  # predictions
-                "norm_prod_jac": jnp.linalg.norm(final_carry[3]),
-                "residual_error_delta": jnp.linalg.norm(residual_error),
-                "norm_delta_0": jnp.linalg.norm(new_delta),
+                "norm_prod_jac": norm_prod_jac,
+                "residual_error_delta": residual_error_delta,
+                "norm_delta_0": jnp.linalg.norm(delta_0),
             }  # We don't add all outputs here to avoid keeping too much information in memory.
 
             return fn_out, (vjp, out)

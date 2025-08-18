@@ -76,7 +76,7 @@ def main(cfg: DictConfig) -> None:
     full_loss_fn = lambda x, y, m: jax.vmap(jax.vmap(loss_fn))(x, y, m).sum() / m.sum()
 
     # Instantiate model
-    assert cfg.model.training_mode in ["normal", "forward_bptt"]
+    assert cfg.model.training_mode in ["normal", "forward", "forward_forward"]
     cell_type = partial(
         GRUCell,
         T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
@@ -94,12 +94,13 @@ def main(cfg: DictConfig) -> None:
     batched_model = BatchedRNN(hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype)
     params = batched_model.init(init_key, dummy_batch["input"])["params"]
 
-    if cfg.model.training_mode == "forward_bptt":
+    if cfg.model.training_mode in ["forward", "forward_forward"]:
         # Overwrite the model to use the correct one, and convert parameters
         model = partial(
             ForwardBPTTRNN,
             cell=partial(ForwardBPTTCell, cell_type=cell_type, loss_fn=loss_fn, dtype=dtype),
             dtype=dtype,
+            two_passes=cfg.model.training_mode == "forward_forward",
         )
         BatchedRNN = nn.vmap(
             model,
