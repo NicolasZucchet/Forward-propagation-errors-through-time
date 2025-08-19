@@ -95,10 +95,19 @@ def main(cfg: DictConfig) -> None:
         lr = cfg.training.learning_rate
     else:
         raise ValueError(f"Unknown scheduler: {cfg.training.scheduler}")
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(cfg.training.gradient_clipping),
-        optax.adam(lr),
-    )
+    optimizer_name = cfg.training.get("optimizer", "adam")
+    if optimizer_name == "adamw":
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(cfg.training.gradient_clipping),
+            optax.adamw(lr, weight_decay=cfg.training.weight_decay),
+        )
+    elif optimizer_name == "adam":
+        optimizer = optax.chain(
+            optax.clip_by_global_norm(cfg.training.gradient_clipping),
+            optax.adam(lr),
+        )
+    else:
+        raise ValueError(f"Unknown optimizer: {optimizer_name}")
 
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
 
