@@ -22,6 +22,7 @@ class GRUCell(nn.Module):
     T_min: float = None
     T_max: float = None
     dtype: Any = jnp.float32
+    norm_before_readout: bool = True
 
     def setup(self):
         dense_h = partial(
@@ -48,6 +49,8 @@ class GRUCell(nn.Module):
         self.dense_in = dense_i(name="in")
         self.dense_hn = dense_h(name="hn", use_bias=True)
         self.output_dense = nn.Dense(self.output_dim, name="output", dtype=self.dtype)
+        if self.norm_before_readout:
+            self.layer_norm = nn.LayerNorm(dtype=self.dtype)
 
     def recurrence(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         r = nn.sigmoid(self.dense_ir(x) + self.dense_hr(h))
@@ -57,6 +60,8 @@ class GRUCell(nn.Module):
         return new_h
 
     def readout(self, h: jnp.ndarray) -> jnp.ndarray:
+        if self.norm_before_readout:
+            h = self.layer_norm(h)
         return self.output_dense(h)
 
     def __call__(self, carry: jnp.ndarray, inputs: jnp.ndarray) -> jnp.ndarray:
@@ -100,6 +105,7 @@ class ForwardBPTTCell(nn.Module):
     cell_type: nn.Module = GRUCell
     dtype: Any = jnp.float32
     approx_inverse: bool = False  # Use approximate inverse for delta update
+    norm_before_readout: bool = True
 
     @nn.compact
     def __call__(self, carry: Any, inputs: jnp.ndarray):
@@ -107,7 +113,10 @@ class ForwardBPTTCell(nn.Module):
         h, delta, inst_delta, prod_jac = carry  # h_t, delta_t, inst_delta_t, prod_jac_t
 
         cell = self.cell_type(
-            hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype
+            hidden_dim=self.hidden_dim,
+            output_dim=self.output_dim,
+            dtype=self.dtype,
+            norm_before_readout=self.norm_before_readout,
         )
 
         # New hidden state (x: [X], h: [H])
@@ -166,6 +175,7 @@ class ForwardBPTTRNN(nn.Module):
     cell: nn.Module = ForwardBPTTCell
     dtype: Any = jnp.float32
     two_passes: bool = True  # start with non zero, correct delta_0
+    norm_before_readout: bool = True
 
     @nn.compact
     def __call__(self, batch):
@@ -185,11 +195,19 @@ class ForwardBPTTRNN(nn.Module):
             in_axes=0,
             out_axes=0,
             length=inputs.shape[0],
-        )(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
+        )(
+            hidden_dim=self.hidden_dim,
+            output_dim=self.output_dim,
+            dtype=self.dtype,
+            norm_before_readout=self.norm_before_readout,
+        )
 
         cell = self.cell(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
         cell = cell.cell_type(
-            hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype
+            hidden_dim=self.hidden_dim,
+            output_dim=self.output_dim,
+            dtype=self.dtype,
+            norm_before_readout=self.norm_before_readout,
         )
 
         def f(module, x, y, m):

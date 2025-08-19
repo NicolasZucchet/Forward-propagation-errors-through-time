@@ -11,6 +11,7 @@ model:
   precision: "float32"
   T_min_frac: 1.0
   T_max_frac: 2.0
+  norm_before_readout: true
 
 training:
   scheduler: "cosine"

@@ -82,9 +82,14 @@ def main(cfg: DictConfig) -> None:
         T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
         T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
         dtype=dtype,
+        norm_before_readout=cfg.model.norm_before_readout,
     )  # Long time scales to give forward BPTT a chance
     BatchedRNN = nn.vmap(
-        partial(StandardRNN, cell_type=cell_type, dtype=dtype),
+        partial(
+            StandardRNN,
+            cell_type=cell_type,
+            dtype=dtype,
+        ),
         in_axes=0,
         out_axes=0,
         variable_axes={"params": None},
@@ -104,6 +109,7 @@ def main(cfg: DictConfig) -> None:
                 loss_fn=loss_fn,
                 dtype=dtype,
                 approx_inverse=cfg.model.approx_inverse,
+                norm_before_readout=cfg.model.norm_before_readout,
             ),
             dtype=dtype,
             two_passes=cfg.model.training_mode == "forward_forward",
