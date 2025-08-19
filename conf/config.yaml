@@ -18,4 +18,5 @@ training:
   scheduler: "cosine"
   learning_rate: 3e-4
   log_every_steps: 20
+  eval_frequency: 1000
   gradient_clipping: 1.0

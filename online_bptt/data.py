@@ -94,7 +94,6 @@ class MNISTDataset:
         return len(self.data)
 
     def __getitem__(self, idx):
-        print("data", self.data[idx].shape, self.labels[idx].shape)
         return {
             "input": self.data[idx],
             "target": self.labels[idx],
@@ -144,15 +143,19 @@ class DatasetDataLoader:
         return n_epochs * epochs_size
 
 
-def create_dataloader(task, batch_size, n_samples, seed, **kwargs):
+def create_dataloaders(task, batch_size, n_samples, eval_frequency, seed, **kwargs):
     if task == "copy":
         _args = {k: kwargs[k] for k in ["seq_len", "bit_width", "waiting_time", "n_classes"]}
         sample_fn = partial(sample_copy_task, **_args)
-        dataloader = DataLoader(sample_fn, batch_size, n_samples, seed)
+        train_loader = DataLoader(sample_fn, batch_size, n_samples, seed)
+        val_loader = None
     elif task == "mnist":
-        dataset = MNISTDataset(split="train")
-        dataloader = DatasetDataLoader(dataset, batch_size, n_samples, seed)
+        train_dataset = MNISTDataset(split="train")
+        train_loader = DatasetDataLoader(train_dataset, batch_size, n_samples, seed)
+        eval_frequency = len(train_dataset) // batch_size  # Evaluate every epoch
+        val_dataset = MNISTDataset(split="test")
+        val_loader = DatasetDataLoader(val_dataset, batch_size, len(val_dataset), seed)
     else:
         raise ValueError(f"Unknown task: {task}")
 
-    return dataloader
+    return train_loader, val_loader, eval_frequency

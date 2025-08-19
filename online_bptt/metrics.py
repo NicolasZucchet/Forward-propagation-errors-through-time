@@ -18,7 +18,6 @@ def cross_entropy_loss(pred, target, mask):
     ce = -jnp.sum(
         jax.nn.one_hot(target, num_classes=pred.shape[-1]) * jax.nn.log_softmax(pred), axis=-1
     )
-    print(jax.nn.one_hot(target, num_classes=pred.shape[-1]).shape, pred.shape, mask.shape)
     out = jnp.sum(mask * ce)
     return out
 
