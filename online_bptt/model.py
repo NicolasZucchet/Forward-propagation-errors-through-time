@@ -8,6 +8,7 @@ from jax import random
 import flax.linen as nn
 from typing import Tuple, Callable, Any
 from functools import partial
+from omegaconf import DictConfig
 
 
 def chrono_init(key, shape, dtype=jnp.float32, T_min=1.0, T_max=10.0):
@@ -79,10 +80,11 @@ class StandardRNN(nn.Module):
     hidden_dim: int
     output_dim: int
     cell_type: nn.Module = GRUCell
+    pooling: str = "none"  # "none" or "cumulative_mean"
     dtype: Any = jnp.float32
 
     @nn.compact
-    def __call__(self, inputs, init_carry=None):
+    def __call__(self, batch, init_carry=None):
         rnn = nn.scan(
             self.cell_type,
             variable_broadcast="params",
@@ -92,9 +94,15 @@ class StandardRNN(nn.Module):
         )(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
 
         if init_carry is None:
-            init_carry = rnn.initialize_carry(random.PRNGKey(0), inputs.shape)
+            init_carry = rnn.initialize_carry(random.PRNGKey(0), batch["input"].shape)
 
-        _, out = rnn(init_carry, inputs)
+        _, out = rnn(init_carry, batch["input"])
+
+        if self.pooling == "cumulative_mean":
+            out["output"] = cumulative_mean_pooling(out["output"])
+        elif self.pooling != "none":
+            raise ValueError(f"Unknown pooling type: {self.pooling}")
+
         return out  # {'output': [T, O]}
 
 
@@ -106,11 +114,14 @@ class ForwardBPTTCell(nn.Module):
     dtype: Any = jnp.float32
     approx_inverse: bool = False  # Use approximate inverse for delta update
     norm_before_readout: bool = True
+    pooling: str = "none"
 
     @nn.compact
     def __call__(self, carry: Any, inputs: jnp.ndarray):
         x, y, m = inputs  # x_t+1, y_t+1, m_t+1 (mask)
-        h, delta, inst_delta, prod_jac = carry  # h_t, delta_t, inst_delta_t, prod_jac_t
+        h, delta, inst_delta, prod_jac, prev_mean, t = (
+            carry  # h_t, delta_t, inst_delta_t, prod_jac_t, mean_t, t
+        )
 
         cell = self.cell_type(
             hidden_dim=self.hidden_dim,
@@ -121,7 +132,14 @@ class ForwardBPTTCell(nn.Module):
 
         # New hidden state (x: [X], h: [H])
         new_h = cell.recurrence(h, x)  # h_t+1: [H]
-        out = cell.readout(new_h)  # pred_t+1: [O]
+        new_t = t + 1.0
+        if self.pooling == "cumulative_mean":
+            new_mean = (t * prev_mean + new_h) / new_t
+        elif self.pooling == "none":
+            new_mean = new_h  # Not used
+        else:
+            raise ValueError(f"Unknown pooling type: {self.pooling}")
+        out = cell.readout(new_mean)  # pred_t+1: [O]
 
         # New jacobian product: prod_t+1 = J_t^T @ prod_t
         jacobian = jax.jacfwd(cell.recurrence, argnums=0)(
@@ -145,9 +163,11 @@ class ForwardBPTTCell(nn.Module):
             # delta_0
 
         # We compute the instantaneous delta for the next iteration as information is available now
-        new_inst_delta = jax.grad(lambda _h: self.loss_fn(cell.readout(_h), y, m))(new_h)  # [H]
+        # NOTE: giving the current mean corresponds to having a straight-though cumulative mean
+        # pooling
+        new_inst_delta = jax.grad(lambda _h: self.loss_fn(cell.readout(_h), y, m))(new_mean)  # [H]
 
-        new_carry = new_h, new_delta, new_inst_delta, new_prod_jac
+        new_carry = new_h, new_delta, new_inst_delta, new_prod_jac, new_mean, new_t
         out = {
             "output": out,  # pred_t+1
             "prev_h": h,  # h_t
@@ -166,7 +186,9 @@ class ForwardBPTTCell(nn.Module):
         delta = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
         inst_delta = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
         prod_jac = jnp.eye(self.hidden_dim, dtype=self.dtype)
-        return h, delta, inst_delta, prod_jac
+        prev_mean = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
+        t = 0.0
+        return h, delta, inst_delta, prod_jac, prev_mean, t
 
 
 class ForwardBPTTRNN(nn.Module):
@@ -176,6 +198,7 @@ class ForwardBPTTRNN(nn.Module):
     dtype: Any = jnp.float32
     two_passes: bool = True  # start with non zero, correct delta_0
     norm_before_readout: bool = True
+    pooling: str = "none"  # "none" or "cumulative_mean"
 
     @nn.compact
     def __call__(self, batch):
@@ -223,7 +246,7 @@ class ForwardBPTTRNN(nn.Module):
                 final_carry, _ = module(init_carry, (x, y, m))
 
                 # Step 2: compute the new initial carry (in particular delta) and perform the second pass
-                _, final_delta, last_inst_delta, final_prod_jac = final_carry
+                _, final_delta, last_inst_delta, final_prod_jac, _, _ = final_carry
                 # We use that:
                 #   1. delta_t - delta_t^BP = -prod_t' J_t'^{-T} delta_0^BP
                 #   2. delta_T^BP = inst_delta_T
@@ -235,7 +258,7 @@ class ForwardBPTTRNN(nn.Module):
                 # Just start directly at 0. NOTE: this will not yield the true gradient
                 delta_0 = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
 
-            new_carry = (init_carry[0], delta_0, init_carry[2], init_carry[3])
+            new_carry = tuple(init_carry[i] if i != 1 else delta_0 for i in range(len(init_carry)))
             final_carry, out = module(new_carry, (x, y, m))
 
             # To check wether that after the second pass, the final delta matches with the one of
@@ -244,7 +267,7 @@ class ForwardBPTTRNN(nn.Module):
             residual_error_delta = jnp.linalg.norm(residual_error)
             norm_prod_jac = jnp.linalg.norm(final_carry[3])
 
-            # Step 3: get the JVP function to do error -> delta mapping. Use the vanilla cell for that.``
+            # Step 3: get the JVP function to do error -> delta mapping. Use the vanilla cell for that.
             def _fn(p):
                 _h, _o = cell.apply({"params": p}, out["prev_h"], x)
                 return _h, _o["output"]
@@ -292,8 +315,83 @@ class ForwardBPTTRNN(nn.Module):
         return custom_f(rnn, inputs, targets, masks)
 
 
+def create_model(
+    cfg: DictConfig,
+    output_dim: int,
+    seq_len: int,
+    loss_fn: Callable,
+    dtype: Any,
+    batch: dict,
+    key: jax.random.PRNGKey,
+):
+    """
+    Helper function to create a model and convert parameters if needed.
+    """
+    assert cfg.model.training_mode in ["normal", "forward", "forward_forward"]
+    cell_type = partial(
+        GRUCell,
+        T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
+        T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
+        norm_before_readout=cfg.model.norm_before_readout,
+        dtype=dtype,
+    )  # Long time scales to give forward BPTT a chance
+    BatchedRNN = nn.vmap(
+        partial(
+            StandardRNN,
+            cell_type=cell_type,
+            pooling=cfg.model.pooling,
+            dtype=dtype,
+        ),
+        in_axes=0,
+        out_axes=0,
+        variable_axes={"params": None},
+        split_rngs={"params": False},
+    )
+    batched_model = BatchedRNN(hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype)
+    params = batched_model.init(key, batch)["params"]
+
+    if cfg.model.training_mode in ["forward", "forward_forward"]:
+        # Overwrite the model to use the correct one, and convert parameters
+        model = partial(
+            ForwardBPTTRNN,
+            cell=partial(
+                ForwardBPTTCell,
+                cell_type=cell_type,
+                loss_fn=loss_fn,
+                dtype=dtype,
+                approx_inverse=cfg.model.approx_inverse,
+                norm_before_readout=cfg.model.norm_before_readout,
+                pooling=cfg.model.pooling,
+            ),
+            dtype=dtype,
+            two_passes=cfg.model.training_mode == "forward_forward",
+            pooling=cfg.model.pooling,
+        )
+        BatchedRNN = nn.vmap(
+            model,
+            in_axes=0,
+            out_axes=0,
+            variable_axes={"params": None},
+            split_rngs={"params": False},
+        )
+        batched_model = BatchedRNN(
+            hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype
+        )
+        params = conversion_params_normal_to_forwardbptt(params)
+
+    return params, batched_model
+
+
 def conversion_params_normal_to_forwardbptt(params: dict) -> dict:
     """
     Convert parameters from StandardRNN to ForwardBPTTRNN format.
     """
     return {"ScanForwardBPTTCell_0": {"GRUCell_0": params["ScanGRUCell_0"]}}
+
+
+def cumulative_mean_pooling(x: jnp.ndarray) -> jnp.ndarray:
+    """
+    Straight-through cumulative mean pooling.
+    """
+    mean = jnp.cumsum(x, axis=0) / jnp.arange(1, x.shape[0] + 1)[:, None]
+    return jax.lax.stop_gradient(mean - x) + x

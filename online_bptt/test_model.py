@@ -51,12 +51,13 @@ def test_forward_bptt_cell_single_step(setup_data):
 
     new_carry, out = forward_bptt_cell.apply(params, initial_carry, dummy_batch)
 
-    new_h, new_delta, new_inst_delta, new_prod_jac = new_carry
+    new_h, new_delta, new_inst_delta, new_prod_jac, new_mean, new_t = new_carry
 
     assert new_h.shape == (hidden_dim,)
     assert new_delta.shape == (hidden_dim,)
     assert new_inst_delta.shape == (hidden_dim,)
     assert new_prod_jac.shape == (hidden_dim, hidden_dim)
+    assert new_mean.shape == (hidden_dim,)
     assert "output" in out
 
 
@@ -104,14 +105,14 @@ def test_forward_bptt_rnn_backward_pass(setup_data):
     params = forward_bptt_rnn.init(key, dummy_batch)
 
     standard_rnn = StandardRNN(hidden_dim=hidden_dim, output_dim=output_dim, dtype=dtype)
-    standard_params = standard_rnn.init(jax.random.PRNGKey(0), dummy_inputs)
+    standard_params = standard_rnn.init(jax.random.PRNGKey(0), dummy_batch)
 
     # Manually copy the weights to compare the same model
     gru_cell_params = params["params"]["ScanForwardBPTTCell_0"]["GRUCell_0"]
     standard_params["params"]["ScanGRUCell_0"] = gru_cell_params
 
     def standard_loss_fn(p, ic, b):
-        y_hat = standard_rnn.apply({"params": p}, b["input"], init_carry=ic)["output"]
+        y_hat = standard_rnn.apply({"params": p}, b, init_carry=ic)["output"]
         return full_loss(y_hat, b["target"], b["mask"])
 
     _, (grad_bptt, _) = jax.value_and_grad(standard_loss_fn, argnums=(0, 1))(

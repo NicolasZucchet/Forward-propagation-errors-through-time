@@ -11,23 +11,16 @@ import wandb
 
 from online_bptt.data import create_dataloader
 from online_bptt.model import (
-    ForwardBPTTCell,
-    StandardRNN,
-    ForwardBPTTRNN,
-    GRUCell,
+    create_model,
     conversion_params_normal_to_forwardbptt,
 )
 from online_bptt import metrics
 
 
-@partial(jax.jit, static_argnums=(0, 1, 2, 3))
-def train_step(model, training_mode, loss_fn, acc_fn, state, batch):
+@partial(jax.jit, static_argnums=(0, 1, 2))
+def train_step(model, loss_fn, acc_fn, state, batch):
     def _loss_fn(params):
-        if training_mode == "normal":
-            out = model.apply({"params": params}, batch["input"])
-        else:
-            out = model.apply({"params": params}, batch)
-
+        out = model.apply({"params": params}, batch)
         pred = out.pop("output")
         loss = loss_fn(pred, batch["target"], batch["mask"])
         acc = acc_fn(pred, batch["target"], batch["mask"])
@@ -76,55 +69,8 @@ def main(cfg: DictConfig) -> None:
     full_loss_fn = lambda x, y, m: jax.vmap(jax.vmap(loss_fn))(x, y, m).sum() / m.sum()
 
     # Instantiate model
-    assert cfg.model.training_mode in ["normal", "forward", "forward_forward"]
-    cell_type = partial(
-        GRUCell,
-        T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
-        T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
-        dtype=dtype,
-        norm_before_readout=cfg.model.norm_before_readout,
-    )  # Long time scales to give forward BPTT a chance
-    BatchedRNN = nn.vmap(
-        partial(
-            StandardRNN,
-            cell_type=cell_type,
-            dtype=dtype,
-        ),
-        in_axes=0,
-        out_axes=0,
-        variable_axes={"params": None},
-        split_rngs={"params": False},
-    )
-    key, init_key = jax.random.split(key)
-    batched_model = BatchedRNN(hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype)
-    params = batched_model.init(init_key, dummy_batch["input"])["params"]
-
-    if cfg.model.training_mode in ["forward", "forward_forward"]:
-        # Overwrite the model to use the correct one, and convert parameters
-        model = partial(
-            ForwardBPTTRNN,
-            cell=partial(
-                ForwardBPTTCell,
-                cell_type=cell_type,
-                loss_fn=loss_fn,
-                dtype=dtype,
-                approx_inverse=cfg.model.approx_inverse,
-                norm_before_readout=cfg.model.norm_before_readout,
-            ),
-            dtype=dtype,
-            two_passes=cfg.model.training_mode == "forward_forward",
-        )
-        BatchedRNN = nn.vmap(
-            model,
-            in_axes=0,
-            out_axes=0,
-            variable_axes={"params": None},
-            split_rngs={"params": False},
-        )
-        batched_model = BatchedRNN(
-            hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype
-        )
-        params = conversion_params_normal_to_forwardbptt(params)
+    key, key_model = jax.random.split(key)
+    params, model = create_model(cfg, output_dim, seq_len, loss_fn, dtype, dummy_batch, key_model)
 
     # Create optimizer and state
     if cfg.training.scheduler == "cosine":
@@ -141,16 +87,14 @@ def main(cfg: DictConfig) -> None:
         optax.adam(lr),
     )
 
-    state = train_state.TrainState.create(apply_fn=batched_model.apply, params=params, tx=optimizer)
+    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
 
     # Training loop
     pbar = tqdm(range(n_train_steps))
     for step in pbar:
         batch = next(iter(dataloader))
         batch = jax.tree.map(lambda x: x.astype(dtype), batch)
-        state, loss, extra = train_step(
-            batched_model, cfg.model.training_mode, full_loss_fn, full_accuracy_fn, state, batch
-        )
+        state, loss, extra = train_step(model, full_loss_fn, full_accuracy_fn, state, batch)
 
         if step % cfg.training.log_every_steps == 0:
             log_dict = {**extra, "loss": loss}
