@@ -125,16 +125,18 @@ def main(cfg: DictConfig) -> None:
         log_accumulator = jax.tree.map(lambda x, y: x + y, log_accumulator, current_log)
 
         # Log training metrics
-        if step % cfg.training.log_every_steps == 0:
+        if (step + 1) % cfg.training.log_every_steps == 0:
             log_dict = jax.tree.map(lambda x: x / cfg.training.log_every_steps, log_accumulator)
             log_dict = jax.tree.map(jnp.mean, log_dict)
             txt = f"Step {step}, Loss: {log_dict['loss']:.4f}, Accuracy: {log_dict['acc']:.4f}"
             pbar.set_description(txt)
-            wandb.log(log_dict, step=step)
+            wandb.log({f"train/{k}": v.item() for k, v in log_dict.items()}, step=step)
             log_accumulator = jax.tree.map(jnp.zeros_like, log_accumulator)
 
         # Eval whenever wanted
-        if val_loader is not None and step % eval_frequency == 0:
+        eval_now = val_loader is not None
+        eval_now = eval_now and (step % eval_frequency == 0 or step == n_train_steps - 1)
+        if eval_now:
             print(f"Evaluating at step {step}", end=" ")
             val_metrics = []
             for batch in val_loader:
@@ -144,8 +146,10 @@ def main(cfg: DictConfig) -> None:
             for k, v in val_metrics.items():
                 results += f"{k}: {v:.4f}, "
             print(results[:-2])
-            wandb.log(val_metrics, step=step)
+            wandb.log({f"val/{k}": v.item() for k, v in val_metrics.items()}, step=step)
 
+    # Close wandb run
+    wandb.finish()
 
 if __name__ == "__main__":
     main()
