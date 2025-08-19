@@ -91,16 +91,24 @@ def main(cfg: DictConfig) -> None:
 
     # Training loop
     pbar = tqdm(range(n_train_steps))
+    log_accumulator = None
     for step in pbar:
         batch = next(iter(dataloader))
         batch = jax.tree.map(lambda x: x.astype(dtype), batch)
         state, loss, extra = train_step(model, full_loss_fn, full_accuracy_fn, state, batch)
 
+        current_log = {"loss": loss, **extra}
+        if log_accumulator is None:
+            log_accumulator = jax.tree.map(jnp.zeros_like, current_log)
+        log_accumulator = jax.tree.map(lambda x, y: x + y, log_accumulator, current_log)
+
         if step % cfg.training.log_every_steps == 0:
-            log_dict = {**extra, "loss": loss}
-            txt = f"Step {step}, Loss: {loss:.4f}, Accuracy: {log_dict['acc']:.4f}"
+            log_dict = jax.tree.map(lambda x: x / cfg.training.log_every_steps, log_accumulator)
+            log_dict = jax.tree.map(jnp.mean, log_dict)
+            txt = f"Step {step}, Loss: {log_dict['loss']:.4f}, Accuracy: {log_dict['acc']:.4f}"
             pbar.set_description(txt)
-            wandb.log(jax.tree.map(jnp.mean, log_dict), step=step)
+            wandb.log(log_dict, step=step)
+            log_accumulator = jax.tree.map(jnp.zeros_like, log_accumulator)
 
 
 if __name__ == "__main__":
