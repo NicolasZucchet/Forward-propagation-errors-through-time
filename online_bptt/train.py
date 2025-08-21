@@ -148,6 +148,10 @@ def main(cfg: DictConfig) -> None:
             print(results[:-2])
             wandb.log({f"val/{k}": v.item() for k, v in val_metrics.items()}, step=step)
 
+        if jnp.isnan(loss):
+            print(f"Loss is NaN at step {step}")
+            break
+
     # Close wandb run
     wandb.finish()
 
