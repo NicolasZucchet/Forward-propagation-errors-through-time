@@ -284,6 +284,9 @@ class ForwardBPTTRNN(nn.Module):
                 "norm_prod_jac": norm_prod_jac,
                 "residual_error_delta": residual_error_delta,
                 "norm_delta_0": jnp.linalg.norm(delta_0),
+                "norm_final_delta_first_pass": jnp.linalg.norm(
+                    final_delta if self.two_passes else final_carry[1]
+                ),
             }  # We don't add all outputs here to avoid keeping too much information in memory.
 
             return fn_out, (vjp, out)
