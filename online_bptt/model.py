@@ -202,7 +202,6 @@ class GRUCell(nn.Module):
     def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         # Compute the Jacobian of the recurrence
         return jax.jacfwd(self.recurrence, argnums=0)(h, x)
-        return J
 
     def readout(self, h: jnp.ndarray) -> jnp.ndarray:
         if self.norm_before_readout:
