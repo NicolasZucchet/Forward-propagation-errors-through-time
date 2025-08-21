@@ -82,6 +82,7 @@ class StandardRNN(nn.Module):
     cell_type: nn.Module = GRUCell
     pooling: str = "none"  # "none" or "cumulative_mean"
     dtype: Any = jnp.float32
+    unroll: int = 1
 
     @nn.compact
     def __call__(self, batch, init_carry=None):
@@ -91,6 +92,7 @@ class StandardRNN(nn.Module):
             split_rngs={"params": False},
             in_axes=0,
             out_axes=0,
+            unroll=self.unroll,
         )(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
 
         if init_carry is None:
@@ -199,6 +201,7 @@ class ForwardBPTTRNN(nn.Module):
     two_passes: bool = True  # start with non zero, correct delta_0
     norm_before_readout: bool = True
     pooling: str = "none"  # "none" or "cumulative_mean"
+    unroll: int = 1
 
     @nn.compact
     def __call__(self, batch):
@@ -218,6 +221,7 @@ class ForwardBPTTRNN(nn.Module):
             in_axes=0,
             out_axes=0,
             length=inputs.shape[0],
+            unroll=self.unroll,
         )(
             hidden_dim=self.hidden_dim,
             output_dim=self.output_dim,
@@ -341,6 +345,7 @@ def create_model(
             cell_type=cell_type,
             pooling=cfg.model.pooling,
             dtype=dtype,
+            unroll=cfg.model.unroll,
         ),
         in_axes=0,
         out_axes=0,

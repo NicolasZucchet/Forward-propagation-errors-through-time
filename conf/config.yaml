@@ -13,6 +13,7 @@ model:
   T_max_frac: 2.0
   norm_before_readout: true
   pooling: "none"
+  unroll: 1
 
 training:
   optimizer: "adamw"
