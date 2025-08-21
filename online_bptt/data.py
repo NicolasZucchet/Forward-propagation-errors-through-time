@@ -73,7 +73,7 @@ def sample_copy_task(
 
 
 class MNISTDataset:
-    def __init__(self, split):
+    def __init__(self, split, downsampling_factor=1):
         dataset = tfds.load("mnist", split=split)
         self.data = []
         self.labels = []
@@ -85,6 +85,20 @@ class MNISTDataset:
 
         # Flatten inputs
         self.data = self.data.reshape(self.data.shape[0], -1, 1).astype(jnp.float32)
+
+        # Downsample by averaging consecutive pixels
+        if downsampling_factor > 1:
+            n_pixels = self.data.shape[1]
+            if n_pixels % downsampling_factor != 0:
+                raise ValueError(
+                    f"The number of pixels ({n_pixels}) is not divisible by the downsampling factor ({downsampling_factor})."
+                )
+            self.data = self.data.reshape(
+                self.data.shape[0],
+                n_pixels // downsampling_factor,
+                downsampling_factor,
+                1,
+            ).mean(axis=2)
 
         # Have one label per time step
         self.labels = self.labels.reshape(-1, 1)  # Shape: (N, 1)
@@ -150,10 +164,11 @@ def create_dataloaders(task, batch_size, n_samples, eval_frequency, seed, **kwar
         train_loader = DataLoader(sample_fn, batch_size, n_samples, seed)
         val_loader = None
     elif task == "mnist":
-        train_dataset = MNISTDataset(split="train")
+        downsampling_factor = kwargs.get("downsampling_factor", 1)
+        train_dataset = MNISTDataset(split="train", downsampling_factor=downsampling_factor)
         train_loader = DatasetDataLoader(train_dataset, batch_size, n_samples, seed)
         eval_frequency = len(train_dataset) // batch_size  # Evaluate every epoch
-        val_dataset = MNISTDataset(split="test")
+        val_dataset = MNISTDataset(split="test", downsampling_factor=downsampling_factor)
         val_loader = DatasetDataLoader(val_dataset, batch_size, len(val_dataset), seed)
     else:
         raise ValueError(f"Unknown task: {task}")
