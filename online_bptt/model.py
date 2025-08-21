@@ -119,6 +119,11 @@ class LRUCell(nn.Module):
         else:
             return new_h.astype(jnp.complex128)
 
+    def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
+        # Compute the Jacobian of the recurrence
+        diag_lambda = jnp.exp(-jnp.exp(self.nu_log) + 1j * jnp.exp(self.theta_log))
+        return jnp.diag(diag_lambda)
+
     def readout(self, h: jnp.ndarray) -> jnp.ndarray:
         # h is complex[H], x is real[O]
         y = self.C(h).real
@@ -193,6 +198,11 @@ class GRUCell(nn.Module):
         n = nn.tanh(self.dense_in(x) + r * self.dense_hn(h))
         new_h = (1.0 - z) * n + z * h
         return new_h
+
+    def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
+        # Compute the Jacobian of the recurrence
+        return jax.jacfwd(self.recurrence, argnums=0)(h, x)
+        return J
 
     def readout(self, h: jnp.ndarray) -> jnp.ndarray:
         if self.norm_before_readout:
@@ -286,9 +296,7 @@ class ForwardBPTTCell(nn.Module):
         out = self.cell.readout(new_mean)  # pred_t+1: [O]
 
         # New jacobian product: prod_t+1 = J_t^T @ prod_t
-        jacobian = jax.jacfwd(self.cell.recurrence, argnums=0, holomorphic=self.cell.is_complex())(
-            h, x
-        )  # [H, H], jacobian of the hidden state update
+        jacobian = self.cell.recurrence_jacobian(h, x)  # [H, H], jacobian of the hidden state update
         jacobian = jacobian.transpose()  # [H, H]
         new_prod_jac = prod_jac @ jacobian  # [H, H]
 
