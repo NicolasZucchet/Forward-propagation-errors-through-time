@@ -5,6 +5,9 @@ defaults:
 seed: 42
 
 model:
+  cell: "gru" # "gru" or "lru"
+  lru_r_min: 0.0
+  lru_r_max: 1.0
   training_mode: "normal"
   approx_inverse: false  # For forward BPTT
   hidden_dim: 64

@@ -45,7 +45,7 @@ def test_forward_bptt_cell_single_step(setup_data):
     forward_bptt_cell = ForwardBPTTCell(
         hidden_dim=hidden_dim, output_dim=output_dim, loss_fn=mse_loss
     )
-    initial_carry = forward_bptt_cell.initialize_carry(key, (input_dim,))
+    initial_carry = forward_bptt_cell.initialize_carry(key, (input_dim,), dtype=jnp.float32)
 
     params = forward_bptt_cell.init(key, initial_carry, dummy_batch)
 
@@ -108,7 +108,7 @@ def test_forward_bptt_rnn_backward_pass(setup_data):
     standard_params = standard_rnn.init(jax.random.PRNGKey(0), dummy_batch)
 
     # Manually copy the weights to compare the same model
-    gru_cell_params = params["params"]["ScanForwardBPTTCell_0"]["GRUCell_0"]
+    gru_cell_params = params["params"]["ScanForwardBPTTCell_0"]["cell"]
     standard_params["params"]["ScanGRUCell_0"] = gru_cell_params
 
     def standard_loss_fn(p, ic, b):
@@ -133,7 +133,7 @@ def test_forward_bptt_rnn_backward_pass(setup_data):
     grads = train_step(params, dummy_batch)
 
     check_grad_all(
-        grads["params"]["ScanForwardBPTTCell_0"]["GRUCell_0"],
+        grads["params"]["ScanForwardBPTTCell_0"]["cell"],
         grad_bptt["ScanGRUCell_0"],
         rtol=1e-3,
     )

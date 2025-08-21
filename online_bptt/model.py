@@ -9,12 +9,146 @@ import flax.linen as nn
 from typing import Tuple, Callable, Any
 from functools import partial
 from omegaconf import DictConfig
+import warnings
+
+# Remove all complex values warnings (appears when taking real value)
+warnings.filterwarnings("ignore", category=jnp.ComplexWarning)
 
 
 def chrono_init(key, shape, dtype=jnp.float32, T_min=1.0, T_max=10.0):
     if T_min is None or T_max is None:
         return jnp.zeros(shape, dtype=dtype)
     return jnp.log(jax.random.uniform(key, shape, dtype=dtype, minval=T_min, maxval=T_max))
+
+
+def nu_init(key, shape, r_min, r_max, dtype=jnp.float32):
+    u = jax.random.uniform(key=key, shape=shape, dtype=dtype)
+    return jnp.log(-0.5 * jnp.log(u * (r_max**2 - r_min**2) + r_min**2))
+
+
+def theta_init(key, shape, max_phase, dtype=jnp.float32):
+    u = jax.random.uniform(key, shape=shape, dtype=dtype)
+    return jnp.log(max_phase * u)
+
+
+def gamma_log_init(key, lamb):
+    nu, theta = lamb
+    diag_lambda = jnp.exp(-jnp.exp(nu) + 1j * jnp.exp(theta))
+    return jnp.log(jnp.sqrt(1 - jnp.abs(diag_lambda) ** 2))
+
+
+def matrix_init(key, shape, normalization, dtype=jnp.float32):
+    return nn.initializers.glorot_uniform()(key, shape, dtype) / normalization
+
+
+class ComplexDense(nn.Module):
+    output_dim: int
+    dtype: Any = jnp.float32
+    use_bias: bool = True
+    normalization: int = 1
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        W_real = nn.Dense(
+            self.output_dim,
+            dtype=self.dtype,
+            use_bias=self.use_bias,
+            kernel_init=lambda k, s, d: matrix_init(
+                k, s, normalization=self.normalization, dtype=d
+            ),
+            name="real",
+        )
+        W_imag = nn.Dense(
+            self.output_dim,
+            dtype=self.dtype,
+            use_bias=self.use_bias,
+            kernel_init=lambda k, s, d: matrix_init(
+                k, s, normalization=self.normalization, dtype=d
+            ),
+            name="imag",
+        )
+        return W_real(x) + 1j * W_imag(x)
+
+
+class LRUCell(nn.Module):
+    input_dim: int
+    hidden_dim: int
+    output_dim: int
+    r_min: float = 0.0
+    r_max: float = 1.0
+    max_phase: float = 6.28
+    dtype: Any = jnp.float32  # For real-valued parameters and inputs/outputs
+    norm_before_readout: bool = True
+
+    def setup(self):
+        if self.dtype == jnp.float64:
+            print("WARNING: float64 not supported for LRUCell")
+        dtype = jnp.float32
+
+        # LRU parameters
+        self.theta_log = self.param(
+            "theta_log", partial(theta_init, max_phase=self.max_phase), (self.hidden_dim,)
+        )
+        self.nu_log = self.param(
+            "nu_log", partial(nu_init, r_min=self.r_min, r_max=self.r_max), (self.hidden_dim,)
+        )
+        self.gamma_log = self.param("gamma_log", gamma_log_init, (self.nu_log, self.theta_log))
+
+        self.B = ComplexDense(self.hidden_dim, dtype=self.dtype, normalization=jnp.sqrt(2))
+        self.C = ComplexDense(self.hidden_dim, dtype=self.dtype)
+
+        if self.norm_before_readout:
+            self.layer_norm = nn.LayerNorm(dtype=dtype)
+
+        self.mlp_readout = nn.Sequential(
+            [
+                nn.Dense(self.hidden_dim * 4, use_bias=True, dtype=dtype),
+                nn.Dense(self.output_dim, use_bias=True, dtype=dtype),
+            ]
+        )
+
+    def recurrence(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
+        # h is complex[H], x is real[O]
+        diag_lambda = jnp.exp(-jnp.exp(self.nu_log) + 1j * jnp.exp(self.theta_log))
+        gamma = jnp.exp(self.gamma_log)
+
+        # Recurrence: h_t+1 = lambda * h_t + B * x_t
+        new_h = diag_lambda * h + gamma * self.B(x)
+        if self.dtype == jnp.float32:
+            return new_h
+        else:
+            return new_h.astype(jnp.complex128)
+
+    def readout(self, h: jnp.ndarray) -> jnp.ndarray:
+        # h is complex[H], x is real[O]
+        y = self.C(h).real
+
+        if self.norm_before_readout:
+            y = self.layer_norm(y)
+
+        y = self.mlp_readout(y)
+        return y
+
+    def __call__(self, carry: jnp.ndarray, inputs: jnp.ndarray) -> jnp.ndarray:
+        x, h = inputs, carry
+        new_h = self.recurrence(h, x)
+        out = self.readout(new_h)
+        return new_h, {"output": out}
+
+    @nn.nowrap
+    def initialize_carry(self, rng, input_shape) -> jnp.ndarray:
+        dtype = jnp.complex128 if self.dtype == jnp.float64 else jnp.complex64
+        return jnp.zeros((self.hidden_dim,), dtype=dtype)
+
+    @nn.nowrap
+    def carry_dtype(self, dtype):
+        if dtype == jnp.float64:
+            return jnp.complex128
+        return jnp.complex64
+
+    @nn.nowrap
+    def is_complex(self):
+        return True
 
 
 class GRUCell(nn.Module):
@@ -75,6 +209,14 @@ class GRUCell(nn.Module):
     def initialize_carry(self, rng, input_shape) -> jnp.ndarray:
         return jnp.zeros((self.hidden_dim,), dtype=self.dtype)
 
+    @nn.nowrap
+    def carry_dtype(self, dtype):
+        return dtype
+
+    @nn.nowrap
+    def is_complex(self):
+        return False
+
 
 class StandardRNN(nn.Module):
     hidden_dim: int
@@ -118,22 +260,22 @@ class ForwardBPTTCell(nn.Module):
     norm_before_readout: bool = True
     pooling: str = "none"
 
-    @nn.compact
-    def __call__(self, carry: Any, inputs: jnp.ndarray):
-        x, y, m = inputs  # x_t+1, y_t+1, m_t+1 (mask)
-        h, delta, inst_delta, prod_jac, prev_mean, t = (
-            carry  # h_t, delta_t, inst_delta_t, prod_jac_t, mean_t, t
-        )
-
-        cell = self.cell_type(
+    def setup(self):
+        self.cell = self.cell_type(
             hidden_dim=self.hidden_dim,
             output_dim=self.output_dim,
             dtype=self.dtype,
             norm_before_readout=self.norm_before_readout,
         )
 
+    def __call__(self, carry: Any, inputs: jnp.ndarray):
+        x, y, m = inputs  # x_t+1, y_t+1, m_t+1 (mask)
+        h, delta, inst_delta, prod_jac, prev_mean, t = (
+            carry  # h_t, delta_t, inst_delta_t, prod_jac_t, mean_t, t
+        )
+
         # New hidden state (x: [X], h: [H])
-        new_h = cell.recurrence(h, x)  # h_t+1: [H]
+        new_h = self.cell.recurrence(h, x)  # h_t+1: [H]
         new_t = t + 1.0
         if self.pooling == "cumulative_mean":
             new_mean = (t * prev_mean + new_h) / new_t
@@ -141,10 +283,10 @@ class ForwardBPTTCell(nn.Module):
             new_mean = new_h  # Not used
         else:
             raise ValueError(f"Unknown pooling type: {self.pooling}")
-        out = cell.readout(new_mean)  # pred_t+1: [O]
+        out = self.cell.readout(new_mean)  # pred_t+1: [O]
 
         # New jacobian product: prod_t+1 = J_t^T @ prod_t
-        jacobian = jax.jacfwd(cell.recurrence, argnums=0)(
+        jacobian = jax.jacfwd(self.cell.recurrence, argnums=0, holomorphic=self.cell.is_complex())(
             h, x
         )  # [H, H], jacobian of the hidden state update
         jacobian = jacobian.transpose()  # [H, H]
@@ -167,7 +309,9 @@ class ForwardBPTTCell(nn.Module):
         # We compute the instantaneous delta for the next iteration as information is available now
         # NOTE: giving the current mean corresponds to having a straight-though cumulative mean
         # pooling
-        new_inst_delta = jax.grad(lambda _h: self.loss_fn(cell.readout(_h), y, m))(new_mean)  # [H]
+        new_inst_delta = jax.grad(lambda _h: self.loss_fn(self.cell.readout(_h), y, m))(
+            new_mean
+        )  # [H])
 
         new_carry = new_h, new_delta, new_inst_delta, new_prod_jac, new_mean, new_t
         out = {
@@ -183,12 +327,16 @@ class ForwardBPTTCell(nn.Module):
         }
         return new_carry, out
 
-    def initialize_carry(self, rng, input_shape) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        h = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
-        delta = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
-        inst_delta = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
-        prod_jac = jnp.eye(self.hidden_dim, dtype=self.dtype)
-        prev_mean = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
+    def initialize_carry(
+        self, rng, input_shape, dtype=None
+    ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        if dtype is None:
+            dtype = self.cell.carry_dtype(self.dtype)
+        h = jnp.zeros((self.hidden_dim,), dtype=dtype)
+        delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
+        inst_delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
+        prod_jac = jnp.eye(self.hidden_dim, dtype=dtype)
+        prev_mean = jnp.zeros((self.hidden_dim,), dtype=dtype)
         t = 0.0
         return h, delta, inst_delta, prod_jac, prev_mean, t
 
@@ -262,7 +410,10 @@ class ForwardBPTTRNN(nn.Module):
                 # Just start directly at 0. NOTE: this will not yield the true gradient
                 delta_0 = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
 
-            new_carry = tuple(init_carry[i] if i != 1 else delta_0 for i in range(len(init_carry)))
+            new_carry = tuple(
+                init_carry[i] if i != 1 else delta_0.astype(init_carry[i].dtype)
+                for i in range(len(init_carry))
+            )
             final_carry, out = module(new_carry, (x, y, m))
 
             # To check wether that after the second pass, the final delta matches with the one of
@@ -276,7 +427,7 @@ class ForwardBPTTRNN(nn.Module):
                 _h, _o = cell.apply({"params": p}, out["prev_h"], x)
                 return _h, _o["output"]
 
-            _, vjp = jax.vjp(_fn, module.variables["params"]["GRUCell_0"])
+            _, vjp = jax.vjp(_fn, module.variables["params"]["cell"])
 
             # Gather some additional logging information
             fn_out = {
@@ -312,7 +463,7 @@ class ForwardBPTTRNN(nn.Module):
             )
 
             return (
-                {"params": {"GRUCell_0": grad_params}},
+                {"params": {"cell": grad_params}},
                 jnp.zeros_like(inputs),
                 jnp.zeros_like(targets),
                 jnp.zeros_like(masks),
@@ -335,13 +486,27 @@ def create_model(
     Helper function to create a model and convert parameters if needed.
     """
     assert cfg.model.training_mode in ["normal", "forward", "forward_forward"]
-    cell_type = partial(
-        GRUCell,
-        T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
-        T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
-        norm_before_readout=cfg.model.norm_before_readout,
-        dtype=dtype,
-    )  # Long time scales to give forward BPTT a chance
+
+    if cfg.model.cell == "gru":
+        cell_type = partial(
+            GRUCell,
+            T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
+            T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
+            norm_before_readout=cfg.model.norm_before_readout,
+            dtype=dtype,
+        )
+    elif cfg.model.cell == "lru":
+        cell_type = partial(
+            LRUCell,
+            input_dim=batch["input"].shape[-1],
+            r_min=cfg.model.lru_r_min,
+            r_max=cfg.model.lru_r_max,
+            norm_before_readout=cfg.model.norm_before_readout,
+            dtype=dtype,
+        )
+    else:
+        raise ValueError(f"Unknown cell type: {cfg.model.cell}")
+
     BatchedRNN = nn.vmap(
         partial(
             StandardRNN,
@@ -385,16 +550,16 @@ def create_model(
         batched_model = BatchedRNN(
             hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype
         )
-        params = conversion_params_normal_to_forwardbptt(params)
+        params = conversion_params_normal_to_forwardbptt(params, cell_name=cfg.model.cell.upper())
 
     return params, batched_model
 
 
-def conversion_params_normal_to_forwardbptt(params: dict) -> dict:
+def conversion_params_normal_to_forwardbptt(params: dict, cell_name: str = "GRU") -> dict:
     """
     Convert parameters from StandardRNN to ForwardBPTTRNN format.
     """
-    return {"ScanForwardBPTTCell_0": {"GRUCell_0": params["ScanGRUCell_0"]}}
+    return {"ScanForwardBPTTCell_0": {f"cell": params[f"Scan{cell_name}Cell_0"]}}
 
 
 def cumulative_mean_pooling(x: jnp.ndarray) -> jnp.ndarray:
