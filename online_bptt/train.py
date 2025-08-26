@@ -10,7 +10,7 @@ from functools import partial
 import wandb
 
 from online_bptt.data import create_dataloaders
-from online_bptt.model import create_model
+from online_bptt.model_factory import create_model
 from online_bptt import metrics
 
 
