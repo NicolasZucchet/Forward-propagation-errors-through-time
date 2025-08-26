@@ -103,7 +103,7 @@ class ForwardBPTTCell(nn.Module):
         # pooling
         new_inst_delta = jax.grad(lambda _h: self.loss_fn(self.cell.readout(_h), y, m))(
             new_mean
-        )  # [H])
+        )  # [H]
 
         new_carry = new_h, new_delta, new_inst_delta, new_prod_jac, new_mean, new_t
         out = {

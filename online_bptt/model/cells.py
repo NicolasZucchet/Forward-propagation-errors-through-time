@@ -73,6 +73,7 @@ class LRUCell(nn.Module):
     max_phase: float = 6.28
     dtype: Any = jnp.float32  # For real-valued parameters and inputs/outputs
     norm_before_readout: bool = True
+    freeze_recurrence: bool = False
 
     def setup(self):
         if self.dtype == jnp.float64:
@@ -105,6 +106,9 @@ class LRUCell(nn.Module):
         # h is complex[H], x is real[O]
         diag_lambda = jnp.exp(-jnp.exp(self.nu_log) + 1j * jnp.exp(self.theta_log))
         gamma = jnp.exp(self.gamma_log)
+
+        if self.freeze_recurrence:
+            diag_lambda = jax.lax.stop_gradient(diag_lambda)
 
         # Recurrence: h_t+1 = lambda * h_t + B * x_t
         new_h = diag_lambda * h + gamma * self.B(x)

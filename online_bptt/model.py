@@ -31,6 +31,7 @@ def create_model(
             T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
             T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
             norm_before_readout=cfg.model.norm_before_readout,
+            freeze_recurrence=cfg.model.freeze_recurrence,
             dtype=dtype,
         )
     elif cfg.model.cell == "lru":
@@ -40,6 +41,7 @@ def create_model(
             r_min=cfg.model.lru_r_min,
             r_max=cfg.model.lru_r_max,
             norm_before_readout=cfg.model.norm_before_readout,
+            freeze_recurrence=cfg.model.freeze_recurrence,
             dtype=dtype,
         )
     else:
