@@ -231,7 +231,7 @@ class StandardRNN(nn.Module):
     hidden_dim: int
     output_dim: int
     cell_type: nn.Module = GRUCell
-    pooling: str = "none"  # "none" or "cumulative_mean"
+    pooling: str = "none"  # "none" or "cumulative_mean" or "mean"
     dtype: Any = jnp.float32
     unroll: int = 1
 
@@ -253,6 +253,11 @@ class StandardRNN(nn.Module):
 
         if self.pooling == "cumulative_mean":
             out["output"] = cumulative_mean_pooling(out["output"])
+        elif self.pooling == "mean":
+            out["output"] = (
+                jnp.cumsum(out["output"], axis=0)
+                / jnp.arange(1, out["output"].shape[0] + 1)[:, None]
+            )  # cumulative mean without stop gradient. NOTE: non-causal
         elif self.pooling != "none":
             raise ValueError(f"Unknown pooling type: {self.pooling}")
 
@@ -295,7 +300,9 @@ class ForwardBPTTCell(nn.Module):
         out = self.cell.readout(new_mean)  # pred_t+1: [O]
 
         # New jacobian product: prod_t+1 = J_t^T @ prod_t
-        jacobian = self.cell.recurrence_jacobian(h, x)  # [H, H], jacobian of the hidden state update
+        jacobian = self.cell.recurrence_jacobian(
+            h, x
+        )  # [H, H], jacobian of the hidden state update
         jacobian = jacobian.transpose()  # [H, H]
         new_prod_jac = prod_jac @ jacobian  # [H, H]
 
