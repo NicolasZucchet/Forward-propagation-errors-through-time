@@ -42,10 +42,11 @@ def eval_step(model, loss_fn, acc_fn, state, batch):
 def main(cfg: DictConfig) -> None:
     key = jax.random.PRNGKey(cfg.seed)
 
-    wandb.init(
-        project="online-bptt",
-        config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
-    )
+    if cfg.training.wandb_log:
+        wandb.init(
+            project="online-bptt",
+            config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
+        )
 
     # Dataloader
     if cfg.model.precision == "float64":
@@ -130,7 +131,8 @@ def main(cfg: DictConfig) -> None:
             log_dict = jax.tree.map(jnp.mean, log_dict)
             txt = f"Step {step}, Loss: {log_dict['loss']:.4f}, Accuracy: {log_dict['acc']:.4f}"
             pbar.set_description(txt)
-            wandb.log({f"train/{k}": v.item() for k, v in log_dict.items()}, step=step)
+            if cfg.training.wandb_log:
+                wandb.log({f"train/{k}": v.item() for k, v in log_dict.items()}, step=step)
             log_accumulator = jax.tree.map(jnp.zeros_like, log_accumulator)
 
         # Eval whenever wanted
@@ -146,14 +148,17 @@ def main(cfg: DictConfig) -> None:
             for k, v in val_metrics.items():
                 results += f"{k}: {v:.4f}, "
             print(results[:-2])
-            wandb.log({f"val/{k}": v.item() for k, v in val_metrics.items()}, step=step)
+            if cfg.training.wandb_log:
+                wandb.log({f"val/{k}": v.item() for k, v in val_metrics.items()}, step=step)
 
         if jnp.isnan(loss):
             print(f"Loss is NaN at step {step}")
             break
 
     # Close wandb run
-    wandb.finish()
+    if cfg.training.wandb_log:
+        wandb.finish()
+
 
 if __name__ == "__main__":
     main()

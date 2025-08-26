@@ -26,3 +26,4 @@ training:
   log_every_steps: 20
   eval_frequency: 1000
   gradient_clipping: 1.0
+  wandb_log: true
