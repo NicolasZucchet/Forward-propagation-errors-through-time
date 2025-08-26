@@ -161,8 +161,11 @@ class GRUCell(nn.Module):
     T_max: float = None
     dtype: Any = jnp.float32
     norm_before_readout: bool = True
+    freeze_recurrence: bool = False
 
     def setup(self):
+        if self.freeze_recurrence:
+            raise NotImplementedError("Freezing recurrence is not implemented for GRUCell.")
         dense_h = partial(
             nn.Dense,
             features=self.hidden_dim,
