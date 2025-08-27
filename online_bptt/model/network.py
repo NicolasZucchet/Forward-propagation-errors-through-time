@@ -13,9 +13,8 @@ class StandardRNN(nn.Module):
     dtype: Any = jnp.float32
     unroll: int = 1
 
-    @nn.compact
-    def __call__(self, batch, init_carry=None):
-        rnn = nn.scan(
+    def setup(self):
+        self.rnn = nn.scan(
             self.cell_type,
             variable_broadcast="params",
             split_rngs={"params": False},
@@ -24,10 +23,11 @@ class StandardRNN(nn.Module):
             unroll=self.unroll,
         )(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
 
+    def __call__(self, batch, init_carry=None):
         if init_carry is None:
-            init_carry = rnn.initialize_carry(jax.random.PRNGKey(0), batch["input"].shape)
+            init_carry = self.initialize_carry(jax.random.PRNGKey(0), batch["input"].shape)
 
-        _, out = rnn(init_carry, batch["input"])
+        _, out = self.rnn(init_carry, batch["input"])
 
         if self.pooling == "cumulative_mean":
             out["output"] = cumulative_mean_pooling(out["output"])
@@ -41,6 +41,8 @@ class StandardRNN(nn.Module):
 
         return out  # {'output': [T, O]}
 
+    def initialize_carry(self, key, input_shape):
+        return self.rnn.initialize_carry(key, input_shape)
 
 class ForwardBPTTCell(nn.Module):
     hidden_dim: int

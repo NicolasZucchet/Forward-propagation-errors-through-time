@@ -36,7 +36,6 @@ def create_model(
     elif cfg.model.cell == "lru":
         cell_type = partial(
             LRUCell,
-            input_dim=batch["input"].shape[-1],
             r_min=cfg.model.lru_r_min,
             r_max=cfg.model.lru_r_max,
             norm_before_readout=cfg.model.norm_before_readout,

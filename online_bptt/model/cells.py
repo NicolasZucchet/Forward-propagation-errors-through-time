@@ -65,7 +65,6 @@ class ComplexDense(nn.Module):
 
 
 class LRUCell(nn.Module):
-    input_dim: int
     hidden_dim: int
     output_dim: int
     r_min: float = 0.0
@@ -114,10 +113,7 @@ class LRUCell(nn.Module):
 
         # Recurrence: h_t+1 = lambda * h_t + B * x_t
         new_h = diag_lambda * h + gamma * self.B(x)
-        if self.dtype == jnp.float32:
-            return new_h
-        else:
-            return new_h.astype(jnp.complex128)
+        return new_h
 
     def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         # Compute the Jacobian of the recurrence
