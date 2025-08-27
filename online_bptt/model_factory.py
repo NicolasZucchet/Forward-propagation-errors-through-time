@@ -7,7 +7,11 @@ import flax.linen as nn
 from typing import Callable, Any
 from functools import partial
 from omegaconf import DictConfig
-from online_bptt.model.cells import GRUCell, LRUCell
+from online_bptt.model.cells import (
+    GRUCell,
+    LRUCell,
+    EUNNCell,
+)
 from online_bptt.model.network import StandardRNN, ForwardBPTTRNN, ForwardBPTTCell
 
 
@@ -31,6 +35,7 @@ def create_model(
             T_min=seq_len * cfg.model.T_min_frac if cfg.model.T_min_frac is not None else None,
             T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
             norm_before_readout=cfg.model.norm_before_readout,
+            freeze_recurrence=cfg.model.freeze_recurrence,
             dtype=dtype,
         )
     elif cfg.model.cell == "lru":
@@ -40,7 +45,17 @@ def create_model(
             r_min=cfg.model.lru_r_min,
             r_max=cfg.model.lru_r_max,
             norm_before_readout=cfg.model.norm_before_readout,
+            freeze_recurrence=cfg.model.freeze_recurrence,
             dtype=dtype,
+        )
+    elif cfg.model.cell in ["eunn"]:
+        cell_type = partial(
+            EUNNCell,
+            input_dim=batch["input"].shape[-1],
+            norm_before_readout=cfg.model.norm_before_readout,
+            freeze_recurrence=cfg.model.freeze_recurrence,
+            dtype=dtype,
+            n_layers=getattr(cfg.model, "eunn_n_layers", 4),
         )
     else:
         raise ValueError(f"Unknown cell type: {cfg.model.cell}")
