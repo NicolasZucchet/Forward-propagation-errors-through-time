@@ -61,7 +61,19 @@ class ComplexDense(nn.Module):
             ),
             name="imag",
         )
-        return W_real(x) + 1j * W_imag(x)
+
+        is_complex = jnp.iscomplexobj(x)
+        if is_complex:
+            x_real, x_imag = x.real, x.imag
+        else:
+            x_real = x
+    
+        if is_complex:
+            y_real = W_real(x_real) - W_imag(x_imag)
+            y_imag = W_real(x_imag) + W_imag(x_real)
+            return y_real + 1j * y_imag
+        else:
+            return W_real(x_real) + 1j * W_imag(x_real)
 
 
 class LRUCell(nn.Module):
