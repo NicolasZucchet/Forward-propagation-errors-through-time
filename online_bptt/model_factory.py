@@ -96,4 +96,4 @@ def conversion_params_normal_to_forwardbptt(params: dict, cell_name: str = "GRU"
     """
     Convert parameters from StandardRNN to ForwardBPTTRNN format.
     """
-    return {"ScanForwardBPTTCell_0": {f"cell": params[f"Scan{cell_name}Cell_0"]}}
+    return {"ScanForwardBPTTCell_0": {f"cell": params[f"rnn"]}}
