@@ -44,6 +44,7 @@ class StandardRNN(nn.Module):
     def initialize_carry(self, key, input_shape):
         return self.rnn.initialize_carry(key, input_shape)
 
+
 class ForwardBPTTCell(nn.Module):
     hidden_dim: int
     output_dim: int
@@ -61,6 +62,7 @@ class ForwardBPTTCell(nn.Module):
             dtype=self.dtype,
             norm_before_readout=self.norm_before_readout,
         )
+        self.diagonal_jacobian = isinstance(self.cell, LRUCell)
 
     def __call__(self, carry: Any, inputs: jnp.ndarray):
         x, y, m = inputs  # x_t+1, y_t+1, m_t+1 (mask)
@@ -79,22 +81,28 @@ class ForwardBPTTCell(nn.Module):
             raise ValueError(f"Unknown pooling type: {self.pooling}")
         out = self.cell.readout(new_mean)  # pred_t+1: [O]
 
-        # New jacobian product: prod_t+1 = J_t^T @ prod_t
+        # New jacobian product: prod_t+1 = prod_t @ J_t^T
         jacobian = self.cell.recurrence_jacobian(
             h, x
-        )  # [H, H], jacobian of the hidden state update
-        jacobian = jacobian.transpose()  # [H, H]
-        new_prod_jac = prod_jac @ jacobian  # [H, H]
+        )  # [H, H] or [H], jacobian of the hidden state update
+        if self.diagonal_jacobian:
+            # NOTE: no need to transpose here
+            new_prod_jac = prod_jac * jacobian  # [H]
+        else:
+            jacobian = jacobian.transpose()  # [H, H]
+            new_prod_jac = prod_jac @ jacobian  # [H, H]
 
         # New delta: delta_t+1 = (J_t^T)^{-1} (delta_t - inst_delta_t)
         # NOTE: it requires the instantaneous delta computed in the previous iteration!
         # Depending on the approx_inverse flag, either compute the exact inverse or an approximation
         if not self.approx_inverse:
-            if isinstance(self.cell, LRUCell):
-                inv_jacobian = jnp.diag(1 / jnp.diag(jacobian))  # taking inverse on diagonal only
+            # new_delta: [H], reverse BPTT update
+            if self.diagonal_jacobian:
+                # leverage that the jacobian is diagonal
+                new_delta = (delta - inst_delta) / jacobian
             else:
                 inv_jacobian = jnp.linalg.inv(jacobian)
-            new_delta = inv_jacobian @ (delta - inst_delta)  # [H], reverse BPTT update
+                new_delta = inv_jacobian @ (delta - inst_delta)
         else:
             # Approximate the inverse Jacobian assuming it is close to identity
             # (J_t^T)^{-1} = (Id + (J_t^T - Id))^{-1} ~ 2Id - J_t^T
@@ -133,7 +141,10 @@ class ForwardBPTTCell(nn.Module):
         h = jnp.zeros((self.hidden_dim,), dtype=dtype)
         delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
         inst_delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
-        prod_jac = jnp.eye(self.hidden_dim, dtype=dtype)
+        if self.diagonal_jacobian:
+            prod_jac = jnp.ones((self.hidden_dim,), dtype=dtype)
+        else:
+            prod_jac = jnp.eye(self.hidden_dim, dtype=dtype)
         prev_mean = jnp.zeros((self.hidden_dim,), dtype=dtype)
         t = 0.0
         return h, delta, inst_delta, prod_jac, prev_mean, t
@@ -202,7 +213,10 @@ class ForwardBPTTRNN(nn.Module):
                 #   2. delta_T^BP = inst_delta_T
                 # So that
                 # delta_0^BP = - (prod_t' J_t'^T) (delta_T - inst_delta_T)
-                delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
+                if module.diagonal_jacobian:
+                    delta_0 = -final_prod_jac * (final_delta - last_inst_delta)
+                else:
+                    delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
 
             else:
                 # Just start directly at 0. NOTE: this will not yield the true gradient

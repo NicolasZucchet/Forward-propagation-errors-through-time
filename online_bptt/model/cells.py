@@ -118,7 +118,7 @@ class LRUCell(nn.Module):
     def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         # Compute the Jacobian of the recurrence
         diag_lambda = jnp.exp(-jnp.exp(self.nu_log) + 1j * jnp.exp(self.theta_log))
-        return jnp.diag(diag_lambda)
+        return diag_lambda
 
     def readout(self, h: jnp.ndarray) -> jnp.ndarray:
         # h is complex[H], x is real[O]
