@@ -76,21 +76,23 @@ class LRUCell(nn.Module):
     freeze_recurrence: bool = False
 
     def setup(self):
-        if self.dtype == jnp.float64:
-            print("WARNING: float64 not supported for LRUCell")
-        dtype = jnp.float32
+        dtype = self.dtype
 
         # LRU parameters
         self.theta_log = self.param(
-            "theta_log", partial(theta_init, max_phase=self.max_phase), (self.hidden_dim,)
+            "theta_log",
+            partial(theta_init, max_phase=self.max_phase, dtype=dtype),
+            (self.hidden_dim,),
         )
         self.nu_log = self.param(
-            "nu_log", partial(nu_init, r_min=self.r_min, r_max=self.r_max), (self.hidden_dim,)
+            "nu_log",
+            partial(nu_init, r_min=self.r_min, r_max=self.r_max, dtype=dtype),
+            (self.hidden_dim,),
         )
         self.gamma_log = self.param("gamma_log", gamma_log_init, (self.nu_log, self.theta_log))
 
-        self.B = ComplexDense(self.hidden_dim, dtype=self.dtype, normalization=jnp.sqrt(2))
-        self.C = ComplexDense(self.hidden_dim, dtype=self.dtype)
+        self.B = ComplexDense(self.hidden_dim, dtype=dtype, normalization=jnp.sqrt(2))
+        self.C = ComplexDense(self.hidden_dim, dtype=dtype)
 
         if self.norm_before_readout:
             self.layer_norm = nn.LayerNorm(dtype=dtype)

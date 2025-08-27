@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 from typing import Tuple, Callable, Any
-from online_bptt.model.cells import GRUCell, cumulative_mean_pooling
+from online_bptt.model.cells import GRUCell, LRUCell, cumulative_mean_pooling
 
 
 class StandardRNN(nn.Module):
@@ -88,7 +88,11 @@ class ForwardBPTTCell(nn.Module):
         # NOTE: it requires the instantaneous delta computed in the previous iteration!
         # Depending on the approx_inverse flag, either compute the exact inverse or an approximation
         if not self.approx_inverse:
-            new_delta = jnp.linalg.inv(jacobian) @ (delta - inst_delta)  # [H], reverse BPTT update
+            if isinstance(self.cell, LRUCell):
+                inv_jacobian = jnp.diag(1 / jnp.diag(jacobian))  # taking inverse on diagonal only
+            else:
+                inv_jacobian = jnp.linalg.inv(jacobian)
+            new_delta = inv_jacobian @ (delta - inst_delta)  # [H], reverse BPTT update
         else:
             # Approximate the inverse Jacobian assuming it is close to identity
             # (J_t^T)^{-1} = (Id + (J_t^T - Id))^{-1} ~ 2Id - J_t^T
