@@ -109,9 +109,9 @@ def main(cfg: DictConfig) -> None:
         )
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_name}")
-
+    
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
-
+ 
     # Training loop
     pbar = tqdm(range(n_train_steps))
     log_accumulator = None
@@ -158,7 +158,6 @@ def main(cfg: DictConfig) -> None:
     # Close wandb run
     if cfg.training.wandb_log:
         wandb.finish()
-
 
 if __name__ == "__main__":
     main()

@@ -62,6 +62,9 @@ def create_model(
     batched_model = BatchedRNN(hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype)
     params = batched_model.init(key, batch)["params"]
 
+    import jax.numpy as jnp
+    print(jax.tree.map(jnp.shape, params))
+
     if cfg.model.training_mode in ["forward", "forward_forward"]:
         # Overwrite the model to use the correct one, and convert parameters
         model = partial(
@@ -89,6 +92,8 @@ def create_model(
         batched_model = BatchedRNN(
             hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype
         )
+        op = batched_model.init(key, batch)["params"]
+        print(jax.tree.map(jnp.shape, op))
         params = conversion_params_normal_to_forwardbptt(params, cell_name=cfg.model.cell.upper())
 
     return params, batched_model

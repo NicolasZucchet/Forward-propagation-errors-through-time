@@ -72,14 +72,14 @@ class ForwardBPTTCell(nn.Module):
 
         # New hidden state (x: [X], h: [H])
         new_h = self.cell.recurrence(h, x)  # h_t+1: [H]
+        out = self.cell.readout(new_h)  # pred_t+1: [O]
         new_t = t + 1.0
         if self.pooling == "cumulative_mean":
-            new_mean = (t * prev_mean + new_h) / new_t
+            new_mean = (t * prev_mean + out) / new_t
         elif self.pooling == "none":
-            new_mean = new_h  # Not used
+            new_mean = out  # Not used
         else:
             raise ValueError(f"Unknown pooling type: {self.pooling}")
-        out = self.cell.readout(new_mean)  # pred_t+1: [O]
 
         # New jacobian product: prod_t+1 = prod_t @ J_t^T
         jacobian = self.cell.recurrence_jacobian(
@@ -113,19 +113,23 @@ class ForwardBPTTCell(nn.Module):
             # delta_0
 
         # We compute the instantaneous delta for the next iteration as information is available now
-        # NOTE: giving the current mean corresponds to having a straight-though cumulative mean
+        # NOTE: giving the current h corresponds to having a straight-though cumulative mean
         # pooling
-        new_inst_delta = jax.grad(lambda _h: self.loss_fn(self.cell.readout(_h), y, m))(
-            new_mean
+        def _straight_through_readout(_h):
+            current_out = self.cell.readout(_h)
+            return current_out + jax.lax.stop_gradient(new_mean - current_out)
+
+        new_inst_delta = jax.grad(lambda _h: self.loss_fn(_straight_through_readout(_h), y, m))(
+            new_h
         )  # [H]
 
         new_carry = new_h, new_delta, new_inst_delta, new_prod_jac, new_mean, new_t
         out = {
-            "output": out,  # pred_t+1
+            "output": new_mean,  # pred_t+1
             "prev_h": h,  # h_t
             "delta": new_delta,  # delta_t+1
             "inst_delta": new_inst_delta,  # inst_delta_t+1
-            "delta_output": jax.grad(lambda o: self.loss_fn(o, y, m))(out),
+            "delta_output": jax.grad(lambda o: self.loss_fn(o, y, m))(new_mean),
             "h_norm": jnp.linalg.norm(new_h),
             "delta_norm": jnp.linalg.norm(new_delta),
             "prod_jac_norm": jnp.linalg.norm(new_prod_jac),
@@ -134,18 +138,21 @@ class ForwardBPTTCell(nn.Module):
         return new_carry, out
 
     def initialize_carry(
-        self, rng, input_shape, dtype=None
+        self, rng, input_shape, dtype=None, diagonal_jacobian=None
     ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        # Overhead for testing purposes
         if dtype is None:
             dtype = self.cell.carry_dtype(self.dtype)
+        diagonal_jacobian = diagonal_jacobian if diagonal_jacobian is not None else self.diagonal_jacobian
+
         h = jnp.zeros((self.hidden_dim,), dtype=dtype)
         delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
         inst_delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
-        if self.diagonal_jacobian:
+        if diagonal_jacobian:
             prod_jac = jnp.ones((self.hidden_dim,), dtype=dtype)
         else:
             prod_jac = jnp.eye(self.hidden_dim, dtype=dtype)
-        prev_mean = jnp.zeros((self.hidden_dim,), dtype=dtype)
+        prev_mean = jnp.zeros((self.output_dim,), dtype=self.dtype)  # dtype for output
         t = 0.0
         return h, delta, inst_delta, prod_jac, prev_mean, t
 
@@ -184,6 +191,7 @@ class ForwardBPTTRNN(nn.Module):
             output_dim=self.output_dim,
             dtype=self.dtype,
             norm_before_readout=self.norm_before_readout,
+            pooling=self.pooling,
         )
 
         cell = self.cell(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
