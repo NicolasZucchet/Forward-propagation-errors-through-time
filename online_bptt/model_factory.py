@@ -48,13 +48,13 @@ def create_model(
             freeze_recurrence=cfg.model.freeze_recurrence,
             dtype=base_precision,
         )
-    elif cfg.model.cell in ["eunn"]:
+    elif cfg.model.cell == "eunn":
         cell_type = partial(
             EUNNCell,
             input_dim=batch["input"].shape[-1],
             norm_before_readout=cfg.model.norm_before_readout,
             freeze_recurrence=cfg.model.freeze_recurrence,
-            dtype=dtype,
+            dtype=base_precision,
             n_layers=getattr(cfg.model, "eunn_n_layers", 4),
             nonlinearity=getattr(cfg.model, "eunn_nonlinearity", "none"),
         )

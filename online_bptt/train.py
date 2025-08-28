@@ -125,8 +125,8 @@ def main(cfg: DictConfig) -> None:
     if optimizer_name == "adamw":
         # We apply weight decay only to non recurrent parameters
         def label_fn(path, _):
-            if any(s in path for s in ["B", "nu_log", "theta_log"]):
-                return "non_recurrent"
+            if any(s in path for s in ["B", "nu_log", "theta_log", "theta", "phi", "diag_phase"]):
+                return "recurrent"
             return "non_recurrent"
 
         param_labels = traverse_util.path_aware_map(label_fn, params)

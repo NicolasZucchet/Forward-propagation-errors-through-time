@@ -10,10 +10,7 @@ from .model.network import (
     ForwardBPTTRNN,
     StandardRNN,
 )
-from .model.cells import (
-    GRUCell,
-    EUNNCell,
-)
+from .model.cells import GRUCell, EUNNCell, LRUCell
 from .utils import check_grad_all
 
 dtype = jnp.float64
@@ -39,7 +36,7 @@ def setup_data():
     return key, input_dim, hidden_dim, output_dim, seq_len
 
 
-@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell])
+@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell, EUNNCell])
 def test_forward_bptt_cell_single_step(setup_data, cell_class):
     key, input_dim, hidden_dim, output_dim, _ = setup_data
 
@@ -72,7 +69,7 @@ def test_forward_bptt_cell_single_step(setup_data, cell_class):
     assert "output" in out
 
 
-@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell])
+@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell, EUNNCell])
 def test_forward_bptt_rnn_sequence(setup_data, cell_class):
     key, input_dim, hidden_dim, output_dim, seq_len = setup_data
     key = random.PRNGKey(42)
@@ -98,7 +95,7 @@ def test_forward_bptt_rnn_sequence(setup_data, cell_class):
     assert outputs["output"].shape == (seq_len, output_dim)
 
 
-@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell])
+@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell, EUNNCell])
 def test_forward_bptt_rnn_backward_pass(setup_data, cell_class):
     key, input_dim, hidden_dim, output_dim, seq_len = setup_data
     key = random.PRNGKey(42)
@@ -108,12 +105,19 @@ def test_forward_bptt_rnn_backward_pass(setup_data, cell_class):
     dummy_mask = jnp.ones((seq_len,), dtype=dtype)
     dummy_batch = {"input": dummy_inputs, "target": dummy_targets, "mask": dummy_mask}
 
-    pooling = "cumulative_mean" # NOTE: important to test pooling as it can change quite a bit gradient computation
+    pooling = "cumulative_mean"  # NOTE: important to test pooling as it can change quite a bit gradient computation
     forward_bptt_rnn = ForwardBPTTRNN(
         hidden_dim=hidden_dim,
         output_dim=output_dim,
-        cell=partial(ForwardBPTTCell, loss_fn=mse_loss, dtype=dtype, cell_type=cell_class),
-        dtype=dtype,
+        cell=partial(
+            ForwardBPTTCell,
+            loss_fn=mse_loss,
+            increased_precision=dtype,
+            base_precision=dtype,
+            cell_type=cell_class,
+        ),
+        increased_precision=dtype,
+        base_precision=dtype,
         pooling=pooling,
     )
 
@@ -175,7 +179,6 @@ def test_eunn_perm_preserves_norm_one_step_no_input():
 
     # Build the cell (float64 for tighter numeric tolerance)
     cell = EUNNCell(
-        input_dim=input_dim,
         hidden_dim=hidden_dim,
         output_dim=output_dim,
         n_layers=4,
@@ -200,4 +203,3 @@ def test_eunn_perm_preserves_norm_one_step_no_input():
     norm_h_next = jnp.linalg.norm(h_next)
     print(norm_h, norm_h_next)
     assert jnp.allclose(norm_h_next, norm_h, rtol=1e-9, atol=1e-9)
-

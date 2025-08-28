@@ -35,6 +35,14 @@ def matrix_init(key, shape, normalization, dtype=jnp.float32):
     return nn.initializers.glorot_uniform()(key, shape, dtype) / normalization
 
 
+def cumulative_mean_pooling(x: jnp.ndarray) -> jnp.ndarray:
+    """
+    Straight-through cumulative mean pooling.
+    """
+    mean = jnp.cumsum(x, axis=0) / jnp.arange(1, x.shape[0] + 1)[:, None]
+    return jax.lax.stop_gradient(mean - x) + x
+
+
 class ComplexDense(nn.Module):
     output_dim: int
     dtype: Any = jnp.float32
@@ -67,7 +75,7 @@ class ComplexDense(nn.Module):
             x_real, x_imag = x.real, x.imag
         else:
             x_real = x
-    
+
         if is_complex:
             y_real = W_real(x_real) - W_imag(x_imag)
             y_imag = W_real(x_imag) + W_imag(x_real)
@@ -87,31 +95,29 @@ class LRUCell(nn.Module):
     freeze_recurrence: bool = False
 
     def setup(self):
-        dtype = self.dtype
-
         # LRU parameters
         self.theta_log = self.param(
             "theta_log",
-            partial(theta_init, max_phase=self.max_phase, dtype=dtype),
+            partial(theta_init, max_phase=self.max_phase, dtype=self.dtype),
             (self.hidden_dim,),
         )
         self.nu_log = self.param(
             "nu_log",
-            partial(nu_init, r_min=self.r_min, r_max=self.r_max, dtype=dtype),
+            partial(nu_init, r_min=self.r_min, r_max=self.r_max, dtype=self.dtype),
             (self.hidden_dim,),
         )
         self.gamma_log = self.param("gamma_log", gamma_log_init, (self.nu_log, self.theta_log))
 
-        self.B = ComplexDense(self.hidden_dim, dtype=dtype, normalization=jnp.sqrt(2))
-        self.C = ComplexDense(self.hidden_dim, dtype=dtype)
+        self.B = ComplexDense(self.hidden_dim, dtype=self.dtype, normalization=jnp.sqrt(2))
+        self.C = ComplexDense(self.hidden_dim, dtype=self.dtype)
 
         if self.norm_before_readout:
-            self.layer_norm = nn.LayerNorm(dtype=dtype)
+            self.layer_norm = nn.LayerNorm(dtype=self.dtype)
 
         self.mlp_readout = nn.Sequential(
             [
-                nn.Dense(self.hidden_dim * 4, use_bias=True, dtype=dtype),
-                nn.Dense(self.output_dim, use_bias=True, dtype=dtype),
+                nn.Dense(self.hidden_dim * 4, use_bias=True, dtype=self.dtype),
+                nn.Dense(self.output_dim, use_bias=True, dtype=self.dtype),
             ]
         )
 
@@ -238,14 +244,6 @@ class GRUCell(nn.Module):
         return False
 
 
-def cumulative_mean_pooling(x: jnp.ndarray) -> jnp.ndarray:
-    """
-    Straight-through cumulative mean pooling.
-    """
-    mean = jnp.cumsum(x, axis=0) / jnp.arange(1, x.shape[0] + 1)[:, None]
-    return jax.lax.stop_gradient(mean - x) + x
-
-
 class EUNNCell(nn.Module):
     """
     EUNN (tunable-space) using Algorithm 1 of the paper:
@@ -258,7 +256,6 @@ class EUNNCell(nn.Module):
     where ind1 and ind2 encode the Fa/Fb permutation patterns.
     """
 
-    input_dim: int
     hidden_dim: int
     output_dim: int
     n_layers: int = 4
@@ -268,45 +265,37 @@ class EUNNCell(nn.Module):
     nonlinearity: str = "none"  # "none", "tanh", or "modRelu"
 
     def setup(self):
-        if self.dtype == jnp.float64:
-            dtype = jnp.float64
-        else:
-            dtype = jnp.float32
 
         half = self.hidden_dim // 2
 
-        def angle_init(key, shape, dtype=dtype):
-            return jax.random.uniform(key, shape, dtype=dtype, minval=0.0, maxval=2 * jnp.pi)
+        angle_init = partial(jax.random.uniform, minval=0.0, maxval=2 * jnp.pi)
+        self.theta = self.param("theta", angle_init, (self.n_layers, half), dtype=self.dtype)
+        self.phi = self.param("phi", angle_init, (self.n_layers, half), dtype=self.dtype)
+        self.diag_phase = self.param("diag_phase", angle_init, (self.hidden_dim,), dtype=self.dtype)
 
-        self.theta = self.param("theta", angle_init, (self.n_layers, half))
-        self.phi = self.param("phi", angle_init, (self.n_layers, half))
-        self.diag_phase = self.param("diag_phase", angle_init, (self.hidden_dim,))
-
-        self.B = ComplexDense(self.hidden_dim, dtype=dtype, normalization=jnp.sqrt(2))
-        self.C = ComplexDense(self.hidden_dim, dtype=dtype)
+        self.B = ComplexDense(self.hidden_dim, dtype=self.dtype, normalization=jnp.sqrt(2))
+        self.C = ComplexDense(self.hidden_dim, dtype=self.dtype)
 
         if self.norm_before_readout:
-            self.layer_norm = nn.LayerNorm(dtype=dtype)
+            self.layer_norm = nn.LayerNorm(dtype=self.dtype)
 
         self.mlp_readout = nn.Sequential(
             [
-                nn.Dense(self.hidden_dim * 4, use_bias=True, dtype=dtype),
-                nn.Dense(self.output_dim, use_bias=True, dtype=dtype),
+                nn.Dense(self.hidden_dim * 4, use_bias=True, dtype=self.dtype),
+                nn.Dense(self.output_dim, use_bias=True, dtype=self.dtype),
             ]
         )
 
         # Create modReLU bias once; unused if nonlinearity != modReLU
         self.modrelu_bias = self.param(
             "modrelu_bias",
-            lambda k, s: jnp.zeros(s, dtype=dtype),
+            lambda k, s: jnp.zeros(s, dtype=self.dtype),
             (self.hidden_dim,),
         )
 
-
     def _apply_layers_vec(self, v: jnp.ndarray) -> jnp.ndarray:
         H = self.hidden_dim
-        n_pairs = H // 2
-        cdtype = jnp.complex128 if self.dtype == jnp.float64 else jnp.complex64
+        cdtype = self.carry_dtype(self.dtype)
 
         # Apply diagonal phase D
         d = jnp.exp(1j * self.diag_phase)
@@ -316,59 +305,60 @@ class EUNNCell(nn.Module):
 
         # Precompute both permutation patterns as arrays indexed by layer type
         # Shape: [2, H] where index 0 = Fa, index 1 = Fb
-        
+
         # ind1: permutation for reordering v1, v2 coefficients
         # For tunable implementation, this depends on the layer pattern
-        ind1_Fa = jnp.arange(H)  # Identity for Fa layers 
-        ind1_Fb = jnp.arange(H)  
-        ind1_Fb = jnp.roll(ind1_Fb, -1) # the first and the last are not used
+        ind1_Fa = jnp.arange(H)  # Identity for Fa layers
+        ind1_Fb = jnp.arange(H)
+        ind1_Fb = jnp.roll(ind1_Fb, -1)  # the first and the last are not used
         ind1_lookup = jnp.stack([ind1_Fa, ind1_Fb])
-        
+
         # ind2: permutation for input vector (the actual pair swaps)
         # Fa: pairs (0,1), (2,3), (4,5), ... -> [1,0,3,2,5,4,...]
         ind2_Fa = jnp.arange(H)
-        for i in range(0, H-1, 2):
-            ind2_Fa = ind2_Fa.at[i].set(i+1)
-            ind2_Fa = ind2_Fa.at[i+1].set(i)
-        
+        for i in range(0, H - 1, 2):
+            ind2_Fa = ind2_Fa.at[i].set(i + 1)
+            ind2_Fa = ind2_Fa.at[i + 1].set(i)
+
         # Fb: pairs (1,2), (3,4), (5,6), ... -> [0,2,1,4,3,6,5,..., H-1] (the first at the last are not used)
         ind2_Fb = jnp.arange(H)
-        for i in range(1, H-1, 2):
-            ind2_Fb = ind2_Fb.at[i].set(i+1)
-            if i+1 < H:
-                ind2_Fb = ind2_Fb.at[i+1].set(i)
+        for i in range(1, H - 1, 2):
+            ind2_Fb = ind2_Fb.at[i].set(i + 1)
+            if i + 1 < H:
+                ind2_Fb = ind2_Fb.at[i + 1].set(i)
         # Stack into lookup tables
         ind2_lookup = jnp.stack([ind2_Fa, ind2_Fb])
+
         def layer_apply(vec, params):
             theta_l, phi_l, layer_idx = params
             if self.freeze_recurrence:
                 theta_l = jax.lax.stop_gradient(theta_l)
                 phi_l = jax.lax.stop_gradient(phi_l)
 
-            c = jnp.cos(theta_l)        # [n_pairs]
-            s = jnp.sin(theta_l)        # [n_pairs]
-            e = jnp.exp(1j * phi_l)     # [n_pairs]
+            c = jnp.cos(theta_l)  # [n_pairs]
+            s = jnp.sin(theta_l)  # [n_pairs]
+            e = jnp.exp(1j * phi_l)  # [n_pairs]
 
             # Build coefficient vectors with alternating pattern within pairs
             # v1 = (e^(iφ₁)cos θ₁, cos θ₁, e^(iφ₂)cos θ₂, cos θ₂, ...)
             # v2 = (-e^(iφ₁)sin θ₁, sin θ₁, -e^(iφ₂)sin θ₂, sin θ₂, ...)
-            
+
             # Create empty arrays
             v1 = jnp.zeros(H, dtype=cdtype)
             v2 = jnp.zeros(H, dtype=cdtype)
-            
+
             # Even indices (0, 2, 4, ...): with phase
             # Odd indices (1, 3, 5, ...): without phase
             even_idx = jnp.arange(0, H, 2)  # [0, 2, 4, ...]
-            odd_idx = jnp.arange(1, H, 2)   # [1, 3, 5, ...]
-            
+            odd_idx = jnp.arange(1, H, 2)  # [1, 3, 5, ...]
+
             # Fill v1: even = e^(iφᵢ)cos θᵢ, odd = cos θᵢ
-            v1 = v1.at[even_idx].set((c * e).astype(cdtype))    # e^(iφᵢ)cos θᵢ on even
-            v1 = v1.at[odd_idx].set(c.astype(cdtype))           # cos θᵢ on odd
-            
-            # Fill v2: even = -e^(iφᵢ)sin θᵢ, odd = sin θᵢ  
-            v2 = v2.at[even_idx].set((-s * e).astype(cdtype))   # -e^(iφᵢ)sin θᵢ on even
-            v2 = v2.at[odd_idx].set(s.astype(cdtype))           # sin θᵢ on odd
+            v1 = v1.at[even_idx].set((c * e).astype(cdtype))  # e^(iφᵢ)cos θᵢ on even
+            v1 = v1.at[odd_idx].set(c.astype(cdtype))  # cos θᵢ on odd
+
+            # Fill v2: even = -e^(iφᵢ)sin θᵢ, odd = sin θᵢ
+            v2 = v2.at[even_idx].set((-s * e).astype(cdtype))  # -e^(iφᵢ)sin θᵢ on even
+            v2 = v2.at[odd_idx].set(s.astype(cdtype))  # sin θᵢ on odd
 
             # Branch-free permutation selection using array indexing
             layer_type = layer_idx & 1  # 0 for Fa, 1 for Fb
@@ -385,7 +375,7 @@ class EUNNCell(nn.Module):
             # y ← v1 * x + v2 * permute(x, ind2)
             # Support both shapes: [H] and [..., H] by operating on the last axis
             vec_perm = jnp.take(vec, ind2, axis=-1)
-            y = v1 * vec + v2 * vec_perm 
+            y = v1 * vec + v2 * vec_perm
 
             # In the case of Fb (branchless update; avoid jax.lax.select)
             mask = jnp.asarray((layer_type & 1) == 1, dtype=y.dtype)
@@ -410,15 +400,17 @@ class EUNNCell(nn.Module):
             scale = nn.relu(r + b) / (r + 1e-6)
             return z * scale
         raise ValueError(f"Unsupported EUNN nonlinearity: {self.nonlinearity}")
+
     def _unitary_matrix(self) -> jnp.ndarray:
         # Build U by applying layers to basis vectors (only when needed)
         H = self.hidden_dim
-        cdtype = jnp.complex128 if self.dtype == jnp.float64 else jnp.complex64
-        I = jnp.eye(H, dtype=cdtype)
+        I = jnp.eye(H, dtype=self.carry_dtype(self.dtype))
+
         def col_apply(col):
             return self._apply_layers_vec(col)
+
         U = jax.vmap(col_apply, in_axes=1, out_axes=1)(I)
-        return U
+        return U.astype(self.carry_dtype(self.dtype))
 
     def recurrence(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         v = self._apply_layers_vec(h)
@@ -429,8 +421,7 @@ class EUNNCell(nn.Module):
     def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         # J = D_nl(preact) @ U, where preact = U h + B x
         U = self._unitary_matrix()
-        if self.freeze_recurrence:
-            U = jax.lax.stop_gradient(U)
+
         preact = self._apply_layers_vec(h) + self.B(x)
         nl = (self.nonlinearity or "none").lower()
         if nl == "none":
@@ -460,7 +451,9 @@ class EUNNCell(nn.Module):
 
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> jnp.ndarray:
-        return jnp.zeros((self.hidden_dim,), dtype=jnp.complex128 if self.dtype == jnp.float64 else jnp.complex64)
+        return jnp.zeros(
+            (self.hidden_dim,), dtype=jnp.complex128 if self.dtype == jnp.float64 else jnp.complex64
+        )
 
     @nn.nowrap
     def carry_dtype(self, dtype):
@@ -469,4 +462,3 @@ class EUNNCell(nn.Module):
     @nn.nowrap
     def is_complex(self):
         return True
-
