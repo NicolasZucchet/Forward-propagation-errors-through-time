@@ -20,7 +20,8 @@ def create_model(
     output_dim: int,
     seq_len: int,
     loss_fn: Callable,
-    dtype: Any,
+    base_precision: Any,
+    increased_precision: Any,
     batch: dict,
     key: jax.random.PRNGKey,
 ):
@@ -36,7 +37,7 @@ def create_model(
             T_max=seq_len * cfg.model.T_max_frac if cfg.model.T_max_frac is not None else None,
             norm_before_readout=cfg.model.norm_before_readout,
             freeze_recurrence=cfg.model.freeze_recurrence,
-            dtype=dtype,
+            dtype=base_precision,
         )
     elif cfg.model.cell == "lru":
         cell_type = partial(
@@ -45,7 +46,7 @@ def create_model(
             r_max=cfg.model.lru_r_max,
             norm_before_readout=cfg.model.norm_before_readout,
             freeze_recurrence=cfg.model.freeze_recurrence,
-            dtype=dtype,
+            dtype=base_precision,
         )
     elif cfg.model.cell in ["eunn"]:
         cell_type = partial(
@@ -65,7 +66,7 @@ def create_model(
             StandardRNN,
             cell_type=cell_type,
             pooling=cfg.model.pooling,
-            dtype=dtype,
+            dtype=base_precision,
             unroll=cfg.model.unroll,
         ),
         in_axes=0,
@@ -73,11 +74,12 @@ def create_model(
         variable_axes={"params": None},
         split_rngs={"params": False},
     )
-    batched_model = BatchedRNN(hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype)
+    batched_model = BatchedRNN(
+        hidden_dim=cfg.model.hidden_dim,
+        output_dim=output_dim,
+        dtype=base_precision,
+    )
     params = batched_model.init(key, batch)["params"]
-
-    import jax.numpy as jnp
-    print(jax.tree.map(jnp.shape, params))
 
     if cfg.model.training_mode in ["forward", "forward_forward"]:
         # Overwrite the model to use the correct one, and convert parameters
@@ -87,12 +89,14 @@ def create_model(
                 ForwardBPTTCell,
                 cell_type=cell_type,
                 loss_fn=loss_fn,
-                dtype=dtype,
+                base_precision=base_precision,
+                increased_precision=increased_precision,
                 approx_inverse=cfg.model.approx_inverse,
                 norm_before_readout=cfg.model.norm_before_readout,
                 pooling=cfg.model.pooling,
             ),
-            dtype=dtype,
+            base_precision=base_precision,
+            increased_precision=increased_precision,
             two_passes=cfg.model.training_mode == "forward_forward",
             pooling=cfg.model.pooling,
         )
@@ -104,10 +108,11 @@ def create_model(
             split_rngs={"params": False},
         )
         batched_model = BatchedRNN(
-            hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype
+            hidden_dim=cfg.model.hidden_dim,
+            output_dim=output_dim,
+            base_precision=base_precision,
+            increased_precision=increased_precision,
         )
-        op = batched_model.init(key, batch)["params"]
-        print(jax.tree.map(jnp.shape, op))
         params = conversion_params_normal_to_forwardbptt(params, cell_name=cfg.model.cell.upper())
 
     return params, batched_model

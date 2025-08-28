@@ -11,16 +11,18 @@ model:
   training_mode: "normal"
   approx_inverse: false  # For forward BPTT
   hidden_dim: 64
-  precision: "float32"
+  base_precision: "float32"
+  increased_precision: "float64"
   T_min_frac: 1.0
   T_max_frac: 2.0
   norm_before_readout: true
   pooling: "none"
   unroll: 1
+  freeze_recurrence: false
 
 training:
   optimizer: "adamw"
-  weight_decay: 0.01
+  weight_decay: 0.0
   scheduler: "cosine"
   learning_rate: 3e-4
   log_every_steps: 20

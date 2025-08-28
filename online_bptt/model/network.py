@@ -50,7 +50,8 @@ class ForwardBPTTCell(nn.Module):
     output_dim: int
     loss_fn: Callable
     cell_type: nn.Module = GRUCell
-    dtype: Any = jnp.float32
+    base_precision: Any = jnp.float32
+    increased_precision: Any = jnp.float64
     approx_inverse: bool = False  # Use approximate inverse for delta update
     norm_before_readout: bool = True
     pooling: str = "none"
@@ -59,7 +60,7 @@ class ForwardBPTTCell(nn.Module):
         self.cell = self.cell_type(
             hidden_dim=self.hidden_dim,
             output_dim=self.output_dim,
-            dtype=self.dtype,
+            dtype=self.base_precision,
             norm_before_readout=self.norm_before_readout,
         )
         self.diagonal_jacobian = isinstance(self.cell, LRUCell)
@@ -137,22 +138,39 @@ class ForwardBPTTCell(nn.Module):
         }
         return new_carry, out
 
+    def carry_dtypes(self, dtype=None):
+        if dtype is None:
+            # Taking into account whether the cell uses complex number or not
+            carry_base_precision = self.cell.carry_dtype(self.base_precision)
+            carry_increased_precision = self.cell.carry_dtype(self.increased_precision)
+            return {
+                "h": carry_base_precision,
+                "delta": carry_increased_precision,  # we need higher precision here as this quantity can explode
+                "inst_delta": carry_base_precision,
+                "prod_jac": carry_base_precision,  # TODO: needs higher precision?
+                "mean": self.base_precision,  # this is in output space, so always real
+            }
+        else:
+            return {k: dtype for k in ["h", "delta", "inst_delta", "prod_jac", "mean"]}
+
     def initialize_carry(
         self, rng, input_shape, dtype=None, diagonal_jacobian=None
     ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        # Overhead for testing purposes
-        if dtype is None:
-            dtype = self.cell.carry_dtype(self.dtype)
-        diagonal_jacobian = diagonal_jacobian if diagonal_jacobian is not None else self.diagonal_jacobian
+        dtypes = self.carry_dtypes(dtype)
 
-        h = jnp.zeros((self.hidden_dim,), dtype=dtype)
-        delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
-        inst_delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
+        # Whether the Jacobian is diagonal
+        diagonal_jacobian = (
+            diagonal_jacobian if diagonal_jacobian is not None else self.diagonal_jacobian
+        )
+
+        h = jnp.zeros((self.hidden_dim,), dtype=dtypes["h"])
+        delta = jnp.zeros((self.hidden_dim,), dtype=dtypes["delta"])
+        inst_delta = jnp.zeros((self.hidden_dim,), dtype=dtypes["inst_delta"])
         if diagonal_jacobian:
-            prod_jac = jnp.ones((self.hidden_dim,), dtype=dtype)
+            prod_jac = jnp.ones((self.hidden_dim,), dtype=dtypes["prod_jac"])
         else:
-            prod_jac = jnp.eye(self.hidden_dim, dtype=dtype)
-        prev_mean = jnp.zeros((self.output_dim,), dtype=self.dtype)  # dtype for output
+            prod_jac = jnp.eye(self.hidden_dim, dtype=dtypes["prod_jac"])
+        prev_mean = jnp.zeros((self.output_dim,), dtype=dtypes["mean"])
         t = 0.0
         return h, delta, inst_delta, prod_jac, prev_mean, t
 
@@ -161,7 +179,8 @@ class ForwardBPTTRNN(nn.Module):
     hidden_dim: int
     output_dim: int
     cell: nn.Module = ForwardBPTTCell
-    dtype: Any = jnp.float32
+    base_precision: Any = jnp.float32
+    increased_precision: Any = jnp.float64
     two_passes: bool = True  # start with non zero, correct delta_0
     norm_before_readout: bool = True
     pooling: str = "none"  # "none" or "cumulative_mean"
@@ -169,7 +188,7 @@ class ForwardBPTTRNN(nn.Module):
 
     @nn.compact
     def __call__(self, batch):
-        if self.dtype == jnp.float32:
+        if self.increased_precision == jnp.float32:
             print(
                 "WARNING: Using float32 precision may lead to numerical instability for forward BPTT!"
             )
@@ -189,16 +208,22 @@ class ForwardBPTTRNN(nn.Module):
         )(
             hidden_dim=self.hidden_dim,
             output_dim=self.output_dim,
-            dtype=self.dtype,
+            base_precision=self.base_precision,
+            increased_precision=self.increased_precision,
             norm_before_readout=self.norm_before_readout,
             pooling=self.pooling,
         )
 
-        cell = self.cell(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
+        cell = self.cell(
+            hidden_dim=self.hidden_dim,
+            output_dim=self.output_dim,
+            base_precision=self.base_precision,
+            increased_precision=self.increased_precision,
+        )  # HACK: only used to get access to the inner cell
         cell = cell.cell_type(
             hidden_dim=self.hidden_dim,
             output_dim=self.output_dim,
-            dtype=self.dtype,
+            dtype=self.base_precision,
             norm_before_readout=self.norm_before_readout,
         )
 
@@ -210,6 +235,7 @@ class ForwardBPTTRNN(nn.Module):
 
         def fwd(module, x, y, m):
             init_carry = rnn.initialize_carry(None, None)
+            dtypes = rnn.carry_dtypes()
             if self.two_passes:
                 # Step 1: run extended forward pass starting from the initial carry.
                 final_carry, _ = module(init_carry, (x, y, m))
@@ -228,12 +254,9 @@ class ForwardBPTTRNN(nn.Module):
 
             else:
                 # Just start directly at 0. NOTE: this will not yield the true gradient
-                delta_0 = jnp.zeros((self.hidden_dim,), dtype=self.dtype)
+                delta_0 = jnp.zeros((self.hidden_dim,), dtype=dtypes["delta"])
 
-            new_carry = tuple(
-                init_carry[i] if i != 1 else delta_0.astype(init_carry[i].dtype)
-                for i in range(len(init_carry))
-            )
+            new_carry = tuple(init_carry[i] if i != 1 else delta_0 for i in range(len(init_carry)))
             final_carry, out = module(new_carry, (x, y, m))
 
             # To check wether that after the second pass, the final delta matches with the one of
@@ -266,12 +289,25 @@ class ForwardBPTTRNN(nn.Module):
             vjp, info = from_forward
             delta_h = info["delta"]  # [T, H]
             delta_out = info["delta_output"]  # [T, O]
+            # NOTE: when using vjps, we use the base precision. The increased precision is only used
+            # when computing the deltas
+            base_carry_precision = cell.carry_dtype(self.base_precision)
 
             # Step 4: compute the parameter grad for all output parameters.
-            grad_params_output = vjp((jnp.zeros_like(delta_h), delta_out))[0]  # PARAMS
+            (grad_params_output,) = vjp(
+                (
+                    jnp.zeros_like(delta_h, dtype=base_carry_precision),
+                    delta_out,
+                )
+            )  # PARAMS
 
             # Step 5: compute the parameter grad for all the other parameters
-            grad_params_hidden = vjp((delta_h, jnp.zeros_like(delta_out)))[0]
+            (grad_params_hidden,) = vjp(
+                (
+                    delta_h.astype(base_carry_precision),
+                    jnp.zeros_like(delta_out),
+                )
+            )
             # NOTE we do that because we overwrite the internal propagation of errors
             # TODO: would be possible to avoid it if stop grad before readout
 

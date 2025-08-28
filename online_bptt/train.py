@@ -49,11 +49,16 @@ def main(cfg: DictConfig) -> None:
         )
 
     # Dataloader
-    if cfg.model.precision == "float64":
+    if cfg.model.base_precision == "float64":
         jax.config.update("jax_enable_x64", True)
-        dtype = jnp.float64
+        base_precision = jnp.float64
     else:
-        dtype = jnp.float32
+        base_precision = jnp.float32
+    if cfg.model.increased_precision == "float64":
+        jax.config.update("jax_enable_x64", True)
+        increased_precision = jnp.float64
+    else:
+        increased_precision = jnp.float32
 
     # Create dataloaders
     train_loader, val_loader, eval_frequency = create_dataloaders(
@@ -75,7 +80,7 @@ def main(cfg: DictConfig) -> None:
         cfg.data.dense_prediction,
     )
     dummy_batch = next(iter(train_loader))
-    dummy_batch = jax.tree.map(lambda x: x.astype(dtype), dummy_batch)
+    dummy_batch = jax.tree.map(lambda x: x.astype(base_precision), dummy_batch)
     output_dim = cfg.data.n_classes if cfg.data.classification else cfg.data.output_dim
     seq_len = dummy_batch["input"].shape[-2]
     n_train_steps = len(train_loader)
@@ -84,7 +89,16 @@ def main(cfg: DictConfig) -> None:
 
     # Instantiate model
     key, key_model = jax.random.split(key)
-    params, model = create_model(cfg, output_dim, seq_len, loss_fn, dtype, dummy_batch, key_model)
+    params, model = create_model(
+        cfg,
+        output_dim,
+        seq_len,
+        loss_fn,
+        base_precision,
+        increased_precision,
+        dummy_batch,
+        key_model,
+    )
 
     # Create optimizer and state
     if cfg.training.scheduler == "cosine":
@@ -117,7 +131,7 @@ def main(cfg: DictConfig) -> None:
     log_accumulator = None
     for step in pbar:
         batch = next(iter(train_loader))
-        batch = jax.tree.map(lambda x: x.astype(dtype), batch)
+        batch = jax.tree.map(lambda x: x.astype(base_precision), batch)
         state, loss, extra = train_step(model, full_loss_fn, full_accuracy_fn, state, batch)
 
         current_log = {"loss": loss, **extra}
