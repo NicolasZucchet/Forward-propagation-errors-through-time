@@ -61,11 +61,22 @@ class ComplexDense(nn.Module):
             ),
             name="imag",
         )
-        return W_real(x) + 1j * W_imag(x)
+
+        is_complex = jnp.iscomplexobj(x)
+        if is_complex:
+            x_real, x_imag = x.real, x.imag
+        else:
+            x_real = x
+    
+        if is_complex:
+            y_real = W_real(x_real) - W_imag(x_imag)
+            y_imag = W_real(x_imag) + W_imag(x_real)
+            return y_real + 1j * y_imag
+        else:
+            return W_real(x_real) + 1j * W_imag(x_real)
 
 
 class LRUCell(nn.Module):
-    input_dim: int
     hidden_dim: int
     output_dim: int
     r_min: float = 0.0
@@ -76,21 +87,23 @@ class LRUCell(nn.Module):
     freeze_recurrence: bool = False
 
     def setup(self):
-        if self.dtype == jnp.float64:
-            print("WARNING: float64 not supported for LRUCell")
-        dtype = jnp.float32
+        dtype = self.dtype
 
         # LRU parameters
         self.theta_log = self.param(
-            "theta_log", partial(theta_init, max_phase=self.max_phase), (self.hidden_dim,)
+            "theta_log",
+            partial(theta_init, max_phase=self.max_phase, dtype=dtype),
+            (self.hidden_dim,),
         )
         self.nu_log = self.param(
-            "nu_log", partial(nu_init, r_min=self.r_min, r_max=self.r_max), (self.hidden_dim,)
+            "nu_log",
+            partial(nu_init, r_min=self.r_min, r_max=self.r_max, dtype=dtype),
+            (self.hidden_dim,),
         )
         self.gamma_log = self.param("gamma_log", gamma_log_init, (self.nu_log, self.theta_log))
 
-        self.B = ComplexDense(self.hidden_dim, dtype=self.dtype, normalization=jnp.sqrt(2))
-        self.C = ComplexDense(self.hidden_dim, dtype=self.dtype)
+        self.B = ComplexDense(self.hidden_dim, dtype=dtype, normalization=jnp.sqrt(2))
+        self.C = ComplexDense(self.hidden_dim, dtype=dtype)
 
         if self.norm_before_readout:
             self.layer_norm = nn.LayerNorm(dtype=dtype)
@@ -112,15 +125,12 @@ class LRUCell(nn.Module):
 
         # Recurrence: h_t+1 = lambda * h_t + B * x_t
         new_h = diag_lambda * h + gamma * self.B(x)
-        if self.dtype == jnp.float32:
-            return new_h
-        else:
-            return new_h.astype(jnp.complex128)
+        return new_h
 
     def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         # Compute the Jacobian of the recurrence
         diag_lambda = jnp.exp(-jnp.exp(self.nu_log) + 1j * jnp.exp(self.theta_log))
-        return jnp.diag(diag_lambda)
+        return diag_lambda
 
     def readout(self, h: jnp.ndarray) -> jnp.ndarray:
         # h is complex[H], x is real[O]
@@ -238,7 +248,7 @@ def cumulative_mean_pooling(x: jnp.ndarray) -> jnp.ndarray:
 
 class EUNNCell(nn.Module):
     """
-    EUNN (tunable-space) using Algorithm 1:
+    EUNN (tunable-space) using Algorithm 1 of the paper:
 
     For each layer:
       - v1 ← permute(v1, ind1)
@@ -255,6 +265,7 @@ class EUNNCell(nn.Module):
     dtype: Any = jnp.float32
     norm_before_readout: bool = True
     freeze_recurrence: bool = False
+    nonlinearity: str = "none"  # "none", "tanh", or "modRelu"
 
     def setup(self):
         if self.dtype == jnp.float64:
@@ -282,6 +293,13 @@ class EUNNCell(nn.Module):
                 nn.Dense(self.hidden_dim * 4, use_bias=True, dtype=dtype),
                 nn.Dense(self.output_dim, use_bias=True, dtype=dtype),
             ]
+        )
+
+        # Create modReLU bias once; unused if nonlinearity != modReLU
+        self.modrelu_bias = self.param(
+            "modrelu_bias",
+            lambda k, s: jnp.zeros(s, dtype=dtype),
+            (self.hidden_dim,),
         )
 
 
@@ -319,7 +337,7 @@ class EUNNCell(nn.Module):
             ind2_Fb = ind2_Fb.at[i].set(i+1)
             if i+1 < H:
                 ind2_Fb = ind2_Fb.at[i+1].set(i)
-                 # Stack into lookup tables
+        # Stack into lookup tables
         ind2_lookup = jnp.stack([ind2_Fa, ind2_Fb])
         def layer_apply(vec, params):
             theta_l, phi_l, layer_idx = params
@@ -367,7 +385,7 @@ class EUNNCell(nn.Module):
             # y ← v1 * x + v2 * permute(x, ind2)
             # Support both shapes: [H] and [..., H] by operating on the last axis
             vec_perm = jnp.take(vec, ind2, axis=-1)
-            y = v1 * vec + v2 * vec_perm
+            y = v1 * vec + v2 * vec_perm 
 
             # In the case of Fb (branchless update; avoid jax.lax.select)
             mask = jnp.asarray((layer_type & 1) == 1, dtype=y.dtype)
@@ -378,6 +396,20 @@ class EUNNCell(nn.Module):
         layers = (self.theta, self.phi, jnp.arange(self.n_layers))
         out, _ = jax.lax.scan(lambda vec, p: layer_apply(vec, (p[0], p[1], p[2])), v, layers)
         return out
+
+    def _apply_nonlinearity(self, z: jnp.ndarray) -> jnp.ndarray:
+        nl = (self.nonlinearity or "none").lower()
+        if nl == "none":
+            return z
+        if nl == "tanh":
+            return jnp.tanh(z)
+        if nl == "modrelu":
+            # b: learnable real bias per hidden unit
+            b = self.modrelu_bias
+            r = jnp.abs(z)
+            scale = nn.relu(r + b) / (r + 1e-6)
+            return z * scale
+        raise ValueError(f"Unsupported EUNN nonlinearity: {self.nonlinearity}")
     def _unitary_matrix(self) -> jnp.ndarray:
         # Build U by applying layers to basis vectors (only when needed)
         H = self.hidden_dim
@@ -390,14 +422,28 @@ class EUNNCell(nn.Module):
 
     def recurrence(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         v = self._apply_layers_vec(h)
-        new_h = v + self.B(x)
+        preact = v + self.B(x)
+        new_h = self._apply_nonlinearity(preact)
         return new_h.astype(jnp.complex128 if self.dtype == jnp.float64 else jnp.complex64)
 
     def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
+        # J = D_nl(preact) @ U, where preact = U h + B x
         U = self._unitary_matrix()
         if self.freeze_recurrence:
             U = jax.lax.stop_gradient(U)
-        return U
+        preact = self._apply_layers_vec(h) + self.B(x)
+        nl = (self.nonlinearity or "none").lower()
+        if nl == "none":
+            return U
+        if nl == "tanh":
+            deriv = 1.0 - jnp.tanh(preact) ** 2
+            return deriv[:, None] * U
+        if nl == "modrelu":
+            b = self.modrelu_bias
+            r = jnp.abs(preact)
+            alpha = nn.relu(r + b) / (r + 1e-6)
+            return alpha[:, None] * U
+        raise ValueError(f"Unsupported EUNN nonlinearity: {self.nonlinearity}")
 
     def readout(self, h: jnp.ndarray) -> jnp.ndarray:
         y = self.C(h).real
@@ -424,5 +470,3 @@ class EUNNCell(nn.Module):
     def is_complex(self):
         return True
 
-# Backward compatibility/alias for tests expecting EUNNPermCell
-EUNNPermCell = EUNNCell

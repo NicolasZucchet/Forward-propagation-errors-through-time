@@ -41,7 +41,6 @@ def create_model(
     elif cfg.model.cell == "lru":
         cell_type = partial(
             LRUCell,
-            input_dim=batch["input"].shape[-1],
             r_min=cfg.model.lru_r_min,
             r_max=cfg.model.lru_r_max,
             norm_before_readout=cfg.model.norm_before_readout,
@@ -56,6 +55,7 @@ def create_model(
             freeze_recurrence=cfg.model.freeze_recurrence,
             dtype=dtype,
             n_layers=getattr(cfg.model, "eunn_n_layers", 4),
+            nonlinearity=getattr(cfg.model, "eunn_nonlinearity", "none"),
         )
     else:
         raise ValueError(f"Unknown cell type: {cfg.model.cell}")
@@ -75,6 +75,9 @@ def create_model(
     )
     batched_model = BatchedRNN(hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype)
     params = batched_model.init(key, batch)["params"]
+
+    import jax.numpy as jnp
+    print(jax.tree.map(jnp.shape, params))
 
     if cfg.model.training_mode in ["forward", "forward_forward"]:
         # Overwrite the model to use the correct one, and convert parameters
@@ -103,6 +106,8 @@ def create_model(
         batched_model = BatchedRNN(
             hidden_dim=cfg.model.hidden_dim, output_dim=output_dim, dtype=dtype
         )
+        op = batched_model.init(key, batch)["params"]
+        print(jax.tree.map(jnp.shape, op))
         params = conversion_params_normal_to_forwardbptt(params, cell_name=cfg.model.cell.upper())
 
     return params, batched_model
@@ -112,4 +117,4 @@ def conversion_params_normal_to_forwardbptt(params: dict, cell_name: str = "GRU"
     """
     Convert parameters from StandardRNN to ForwardBPTTRNN format.
     """
-    return {"ScanForwardBPTTCell_0": {f"cell": params[f"Scan{cell_name}Cell_0"]}}
+    return {"ScanForwardBPTTCell_0": {f"cell": params[f"rnn"]}}

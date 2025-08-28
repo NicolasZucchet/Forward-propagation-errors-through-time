@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 from typing import Tuple, Callable, Any
-from online_bptt.model.cells import GRUCell, cumulative_mean_pooling
+from online_bptt.model.cells import GRUCell, LRUCell, cumulative_mean_pooling
 
 
 class StandardRNN(nn.Module):
@@ -13,9 +13,8 @@ class StandardRNN(nn.Module):
     dtype: Any = jnp.float32
     unroll: int = 1
 
-    @nn.compact
-    def __call__(self, batch, init_carry=None):
-        rnn = nn.scan(
+    def setup(self):
+        self.rnn = nn.scan(
             self.cell_type,
             variable_broadcast="params",
             split_rngs={"params": False},
@@ -24,10 +23,11 @@ class StandardRNN(nn.Module):
             unroll=self.unroll,
         )(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
 
+    def __call__(self, batch, init_carry=None):
         if init_carry is None:
-            init_carry = rnn.initialize_carry(jax.random.PRNGKey(0), batch["input"].shape)
+            init_carry = self.initialize_carry(jax.random.PRNGKey(0), batch["input"].shape)
 
-        _, out = rnn(init_carry, batch["input"])
+        _, out = self.rnn(init_carry, batch["input"])
 
         if self.pooling == "cumulative_mean":
             out["output"] = cumulative_mean_pooling(out["output"])
@@ -40,6 +40,9 @@ class StandardRNN(nn.Module):
             raise ValueError(f"Unknown pooling type: {self.pooling}")
 
         return out  # {'output': [T, O]}
+
+    def initialize_carry(self, key, input_shape):
+        return self.rnn.initialize_carry(key, input_shape)
 
 
 class ForwardBPTTCell(nn.Module):
@@ -59,6 +62,7 @@ class ForwardBPTTCell(nn.Module):
             dtype=self.dtype,
             norm_before_readout=self.norm_before_readout,
         )
+        self.diagonal_jacobian = isinstance(self.cell, LRUCell)
 
     def __call__(self, carry: Any, inputs: jnp.ndarray):
         x, y, m = inputs  # x_t+1, y_t+1, m_t+1 (mask)
@@ -68,27 +72,37 @@ class ForwardBPTTCell(nn.Module):
 
         # New hidden state (x: [X], h: [H])
         new_h = self.cell.recurrence(h, x)  # h_t+1: [H]
+        out = self.cell.readout(new_h)  # pred_t+1: [O]
         new_t = t + 1.0
         if self.pooling == "cumulative_mean":
-            new_mean = (t * prev_mean + new_h) / new_t
+            new_mean = (t * prev_mean + out) / new_t
         elif self.pooling == "none":
-            new_mean = new_h  # Not used
+            new_mean = out  # Not used
         else:
             raise ValueError(f"Unknown pooling type: {self.pooling}")
-        out = self.cell.readout(new_mean)  # pred_t+1: [O]
 
-        # New jacobian product: prod_t+1 = J_t^T @ prod_t
+        # New jacobian product: prod_t+1 = prod_t @ J_t^T
         jacobian = self.cell.recurrence_jacobian(
             h, x
-        )  # [H, H], jacobian of the hidden state update
-        jacobian = jacobian.transpose()  # [H, H]
-        new_prod_jac = prod_jac @ jacobian  # [H, H]
+        )  # [H, H] or [H], jacobian of the hidden state update
+        if self.diagonal_jacobian:
+            # NOTE: no need to transpose here
+            new_prod_jac = prod_jac * jacobian  # [H]
+        else:
+            jacobian = jacobian.transpose()  # [H, H]
+            new_prod_jac = prod_jac @ jacobian  # [H, H]
 
         # New delta: delta_t+1 = (J_t^T)^{-1} (delta_t - inst_delta_t)
         # NOTE: it requires the instantaneous delta computed in the previous iteration!
         # Depending on the approx_inverse flag, either compute the exact inverse or an approximation
         if not self.approx_inverse:
-            new_delta = jnp.linalg.inv(jacobian) @ (delta - inst_delta)  # [H], reverse BPTT update
+            # new_delta: [H], reverse BPTT update
+            if self.diagonal_jacobian:
+                # leverage that the jacobian is diagonal
+                new_delta = (delta - inst_delta) / jacobian
+            else:
+                inv_jacobian = jnp.linalg.inv(jacobian)
+                new_delta = inv_jacobian @ (delta - inst_delta)
         else:
             # Approximate the inverse Jacobian assuming it is close to identity
             # (J_t^T)^{-1} = (Id + (J_t^T - Id))^{-1} ~ 2Id - J_t^T
@@ -99,19 +113,23 @@ class ForwardBPTTCell(nn.Module):
             # delta_0
 
         # We compute the instantaneous delta for the next iteration as information is available now
-        # NOTE: giving the current mean corresponds to having a straight-though cumulative mean
+        # NOTE: giving the current h corresponds to having a straight-though cumulative mean
         # pooling
-        new_inst_delta = jax.grad(lambda _h: self.loss_fn(self.cell.readout(_h), y, m))(
-            new_mean
+        def _straight_through_readout(_h):
+            current_out = self.cell.readout(_h)
+            return current_out + jax.lax.stop_gradient(new_mean - current_out)
+
+        new_inst_delta = jax.grad(lambda _h: self.loss_fn(_straight_through_readout(_h), y, m))(
+            new_h
         )  # [H]
 
         new_carry = new_h, new_delta, new_inst_delta, new_prod_jac, new_mean, new_t
         out = {
-            "output": out,  # pred_t+1
+            "output": new_mean,  # pred_t+1
             "prev_h": h,  # h_t
             "delta": new_delta,  # delta_t+1
             "inst_delta": new_inst_delta,  # inst_delta_t+1
-            "delta_output": jax.grad(lambda o: self.loss_fn(o, y, m))(out),
+            "delta_output": jax.grad(lambda o: self.loss_fn(o, y, m))(new_mean),
             "h_norm": jnp.linalg.norm(new_h),
             "delta_norm": jnp.linalg.norm(new_delta),
             "prod_jac_norm": jnp.linalg.norm(new_prod_jac),
@@ -120,15 +138,21 @@ class ForwardBPTTCell(nn.Module):
         return new_carry, out
 
     def initialize_carry(
-        self, rng, input_shape, dtype=None
+        self, rng, input_shape, dtype=None, diagonal_jacobian=None
     ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        # Overhead for testing purposes
         if dtype is None:
             dtype = self.cell.carry_dtype(self.dtype)
+        diagonal_jacobian = diagonal_jacobian if diagonal_jacobian is not None else self.diagonal_jacobian
+
         h = jnp.zeros((self.hidden_dim,), dtype=dtype)
         delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
         inst_delta = jnp.zeros((self.hidden_dim,), dtype=dtype)
-        prod_jac = jnp.eye(self.hidden_dim, dtype=dtype)
-        prev_mean = jnp.zeros((self.hidden_dim,), dtype=dtype)
+        if diagonal_jacobian:
+            prod_jac = jnp.ones((self.hidden_dim,), dtype=dtype)
+        else:
+            prod_jac = jnp.eye(self.hidden_dim, dtype=dtype)
+        prev_mean = jnp.zeros((self.output_dim,), dtype=self.dtype)  # dtype for output
         t = 0.0
         return h, delta, inst_delta, prod_jac, prev_mean, t
 
@@ -167,6 +191,7 @@ class ForwardBPTTRNN(nn.Module):
             output_dim=self.output_dim,
             dtype=self.dtype,
             norm_before_readout=self.norm_before_readout,
+            pooling=self.pooling,
         )
 
         cell = self.cell(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
@@ -196,7 +221,10 @@ class ForwardBPTTRNN(nn.Module):
                 #   2. delta_T^BP = inst_delta_T
                 # So that
                 # delta_0^BP = - (prod_t' J_t'^T) (delta_T - inst_delta_T)
-                delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
+                if module.diagonal_jacobian:
+                    delta_0 = -final_prod_jac * (final_delta - last_inst_delta)
+                else:
+                    delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
 
             else:
                 # Just start directly at 0. NOTE: this will not yield the true gradient
