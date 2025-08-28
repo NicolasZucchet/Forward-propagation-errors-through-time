@@ -22,7 +22,7 @@ model:
 
 training:
   optimizer: "adamw"
-  weight_decay: 0.0
+  weight_decay: 0.01
   scheduler: "cosine"
   learning_rate: 3e-4
   log_every_steps: 20

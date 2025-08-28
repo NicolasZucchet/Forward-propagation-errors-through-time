@@ -5,9 +5,20 @@ import jax.numpy as jnp
 import optax
 from flax.training import train_state
 import flax.linen as nn
+from flax import traverse_util
+from flax import traverse_util
+from flax import traverse_util
+from flax import traverse_util
+from flax import traverse_util
+from flax import traverse_util
+from flax import traverse_util
+from flax import traverse_util
+from flax import traverse_util
 from tqdm import tqdm
 from functools import partial
 import wandb
+from flax.core import freeze
+from flax import traverse_util
 
 from online_bptt.data import create_dataloaders
 from online_bptt.model_factory import create_model
@@ -112,9 +123,23 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"Unknown scheduler: {cfg.training.scheduler}")
     optimizer_name = cfg.training.get("optimizer", "adam")
     if optimizer_name == "adamw":
+        # We apply weight decay only to non recurrent parameters
+        def label_fn(path, _):
+            if any(s in path for s in ["B", "nu_log", "theta_log"]):
+                return "non_recurrent"
+            return "non_recurrent"
+
+        param_labels = traverse_util.path_aware_map(label_fn, params)
+
         optimizer = optax.chain(
             optax.clip_by_global_norm(cfg.training.gradient_clipping),
-            optax.adamw(lr, weight_decay=cfg.training.weight_decay),
+            optax.multi_transform(
+                {
+                    "non_recurrent": optax.adamw(lr, weight_decay=cfg.training.weight_decay),
+                    "recurrent": optax.adam(lr),
+                },
+                param_labels,
+            ),
         )
     elif optimizer_name == "adam":
         optimizer = optax.chain(
