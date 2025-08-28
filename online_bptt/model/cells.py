@@ -117,6 +117,7 @@ class LRUCell(nn.Module):
         self.mlp_readout = nn.Sequential(
             [
                 nn.Dense(self.hidden_dim * 4, use_bias=True, dtype=self.dtype),
+                nn.relu,
                 nn.Dense(self.output_dim, use_bias=True, dtype=self.dtype),
             ]
         )
@@ -282,6 +283,7 @@ class EUNNCell(nn.Module):
         self.mlp_readout = nn.Sequential(
             [
                 nn.Dense(self.hidden_dim * 4, use_bias=True, dtype=self.dtype),
+                nn.relu,
                 nn.Dense(self.output_dim, use_bias=True, dtype=self.dtype),
             ]
         )

@@ -51,7 +51,6 @@ def create_model(
     elif cfg.model.cell == "eunn":
         cell_type = partial(
             EUNNCell,
-            input_dim=batch["input"].shape[-1],
             norm_before_readout=cfg.model.norm_before_readout,
             freeze_recurrence=cfg.model.freeze_recurrence,
             dtype=base_precision,
