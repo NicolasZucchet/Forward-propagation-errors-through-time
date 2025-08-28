@@ -91,11 +91,16 @@ class Cell(nn.Module, metaclass=abc.ABCMeta):
     dtype: Any = jnp.float32
     norm_before_readout: bool = True
     freeze_recurrence: bool = False
+    stop_gradients: str = "none"  # whether to apply any stop gradient
 
     def __call__(self, carry: jnp.ndarray, inputs: jnp.ndarray) -> jnp.ndarray:
         x, h = inputs, carry
         new_h = self.recurrence(h, x)
-        out = self.readout(new_h)
+
+        new_h_for_readout = (
+            jax.lax.stop_gradient(new_h) if self.stop_gradients in ["readout"] else new_h
+        ) # stop gradient before readout, useful if ForwardBPTTCell
+        out = self.readout(new_h_for_readout)
         return new_h, {"output": out}
 
     @abc.abstractmethod

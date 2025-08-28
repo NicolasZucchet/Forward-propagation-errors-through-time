@@ -219,12 +219,13 @@ class ForwardBPTTRNN(nn.Module):
             output_dim=self.output_dim,
             base_precision=self.base_precision,
             increased_precision=self.increased_precision,
-        )  # HACK: only used to get access to the inner cell
+        )  # HACK: only use ForwardBPTTCell to get access to the inner cell
         cell = cell.cell_type(
             hidden_dim=self.hidden_dim,
             output_dim=self.output_dim,
             dtype=self.base_precision,
             norm_before_readout=self.norm_before_readout,
+            stop_gradients="readout",  # NOTE: needed for bwd
         )
 
         def f(module, x, y, m):
@@ -253,7 +254,8 @@ class ForwardBPTTRNN(nn.Module):
                     delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
 
             else:
-                # Just start directly at 0. NOTE: this will not yield the true gradient
+                # Just start directly at delta=0. 
+                # NOTE: this will not yield the true gradient
                 delta_0 = jnp.zeros((self.hidden_dim,), dtype=dtypes["delta"])
 
             new_carry = tuple(init_carry[i] if i != 1 else delta_0 for i in range(len(init_carry)))
@@ -293,30 +295,16 @@ class ForwardBPTTRNN(nn.Module):
             # when computing the deltas
             base_carry_precision = cell.carry_dtype(self.base_precision)
 
-            # Step 4: compute the parameter grad for all output parameters.
-            (grad_params_output,) = vjp(
+            # Step 4: use the vjp to compute the partial derivatives of the recurrence and the
+            # readout needed for the gradient
+            # NOTE: this is why having stop_gradients=readout is important, otherwise the
+            # parameters within the recurrence would receive too times the right gradient
+            (grad_params,) = vjp(
                 (
-                    jnp.zeros_like(delta_h, dtype=base_carry_precision),
+                    delta_h.astype(base_carry_precision),
                     delta_out,
                 )
             )  # PARAMS
-
-            # Step 5: compute the parameter grad for all the other parameters
-            (grad_params_hidden,) = vjp(
-                (
-                    delta_h.astype(base_carry_precision),
-                    jnp.zeros_like(delta_out),
-                )
-            )
-            # NOTE we do that because we overwrite the internal propagation of errors
-            # TODO: would be possible to avoid it if stop grad before readout
-
-            # Step 6: merge
-            grad_params = jax.tree.map(
-                lambda a, b: (a - b) * (jnp.linalg.norm(b) < 1e-8) + b,
-                grad_params_output,
-                grad_params_hidden,
-            )
 
             return (
                 {"params": {"cell": grad_params}},
