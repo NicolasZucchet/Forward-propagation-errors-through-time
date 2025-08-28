@@ -4,6 +4,7 @@ import flax.linen as nn
 from typing import Any
 from functools import partial
 import warnings
+import abc
 
 # Remove all complex values warnings (appears when taking real value)
 warnings.filterwarnings("ignore", category=jnp.ComplexWarning)
@@ -84,15 +85,57 @@ class ComplexDense(nn.Module):
             return W_real(x_real) + 1j * W_imag(x_real)
 
 
-class LRUCell(nn.Module):
+class Cell(nn.Module, metaclass=abc.ABCMeta):
     hidden_dim: int
     output_dim: int
+    dtype: Any = jnp.float32
+    norm_before_readout: bool = True
+    freeze_recurrence: bool = False
+
+    def __call__(self, carry: jnp.ndarray, inputs: jnp.ndarray) -> jnp.ndarray:
+        x, h = inputs, carry
+        new_h = self.recurrence(h, x)
+        out = self.readout(new_h)
+        return new_h, {"output": out}
+
+    @abc.abstractmethod
+    def recurrence(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
+        """The core recurrence function of the cell."""
+        pass
+
+    def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
+        """The Jacobian of the recurrence with respect to the hidden state."""
+        # By default, we use automatic differentiation
+        return jax.jacfwd(self.recurrence, argnums=0)(h, x)
+
+    @abc.abstractmethod
+    def readout(self, h: jnp.ndarray) -> jnp.ndarray:
+        """The readout function from the hidden state to the output."""
+        pass
+
+    @nn.nowrap
+    @abc.abstractmethod
+    def initialize_carry(self, rng, input_shape) -> jnp.ndarray:
+        """Initializes the hidden state."""
+        pass
+
+    @nn.nowrap
+    @abc.abstractmethod
+    def carry_dtype(self, dtype):
+        """The dtype of the hidden state."""
+        pass
+
+    @nn.nowrap
+    @abc.abstractmethod
+    def is_complex(self):
+        """Whether the hidden state is complex."""
+        pass
+
+
+class LRUCell(Cell):
     r_min: float = 0.0
     r_max: float = 1.0
     max_phase: float = 6.28
-    dtype: Any = jnp.float32  # For real-valued parameters and inputs/outputs
-    norm_before_readout: bool = True
-    freeze_recurrence: bool = False
 
     def setup(self):
         # LRU parameters
@@ -149,12 +192,6 @@ class LRUCell(nn.Module):
         y = self.mlp_readout(y)
         return y
 
-    def __call__(self, carry: jnp.ndarray, inputs: jnp.ndarray) -> jnp.ndarray:
-        x, h = inputs, carry
-        new_h = self.recurrence(h, x)
-        out = self.readout(new_h)
-        return new_h, {"output": out}
-
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> jnp.ndarray:
         dtype = jnp.complex128 if self.dtype == jnp.float64 else jnp.complex64
@@ -171,14 +208,9 @@ class LRUCell(nn.Module):
         return True
 
 
-class GRUCell(nn.Module):
-    hidden_dim: int
-    output_dim: int
+class GRUCell(Cell):
     T_min: float = None
     T_max: float = None
-    dtype: Any = jnp.float32
-    norm_before_readout: bool = True
-    freeze_recurrence: bool = False
 
     def setup(self):
         if self.freeze_recurrence:
@@ -217,20 +249,10 @@ class GRUCell(nn.Module):
         new_h = (1.0 - z) * n + z * h
         return new_h
 
-    def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
-        # Compute the Jacobian of the recurrence
-        return jax.jacfwd(self.recurrence, argnums=0)(h, x)
-
     def readout(self, h: jnp.ndarray) -> jnp.ndarray:
         if self.norm_before_readout:
             h = self.layer_norm(h)
         return self.output_dense(h)
-
-    def __call__(self, carry: jnp.ndarray, inputs: jnp.ndarray) -> jnp.ndarray:
-        x, h = inputs, carry
-        new_h = self.recurrence(h, x)
-        out = self.readout(new_h)
-        return new_h, {"output": out}
 
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> jnp.ndarray:
@@ -245,7 +267,7 @@ class GRUCell(nn.Module):
         return False
 
 
-class EUNNCell(nn.Module):
+class EUNNCell(Cell):
     """
     EUNN (tunable-space) using Algorithm 1 of the paper:
 
@@ -257,12 +279,7 @@ class EUNNCell(nn.Module):
     where ind1 and ind2 encode the Fa/Fb permutation patterns.
     """
 
-    hidden_dim: int
-    output_dim: int
     n_layers: int = 4
-    dtype: Any = jnp.float32
-    norm_before_readout: bool = True
-    freeze_recurrence: bool = False
     nonlinearity: str = "none"  # "none", "tanh", or "modRelu"
 
     def setup(self):
@@ -444,12 +461,6 @@ class EUNNCell(nn.Module):
             y = self.layer_norm(y)
         y = self.mlp_readout(y)
         return y
-
-    def __call__(self, carry: jnp.ndarray, inputs: jnp.ndarray) -> jnp.ndarray:
-        x, h = inputs, carry
-        new_h = self.recurrence(h, x)
-        out = self.readout(new_h)
-        return new_h, {"output": out}
 
     @nn.nowrap
     def initialize_carry(self, rng, input_shape) -> jnp.ndarray:
