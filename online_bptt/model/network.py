@@ -254,7 +254,7 @@ class ForwardBPTTRNN(nn.Module):
                     delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
 
             else:
-                # Just start directly at delta=0. 
+                # Just start directly at delta=0.
                 # NOTE: this will not yield the true gradient
                 delta_0 = jnp.zeros((self.hidden_dim,), dtype=dtypes["delta"])
 
@@ -268,11 +268,11 @@ class ForwardBPTTRNN(nn.Module):
             norm_prod_jac = jnp.linalg.norm(final_carry[3])
 
             # Step 3: get the JVP function to do error -> delta mapping. Use the vanilla cell for that.
-            def _fn(p):
-                _h, _o = cell.apply({"params": p}, out["prev_h"], x)
+            def _fn(_p, _x):
+                _h, _o = cell.apply({"params": _p}, out["prev_h"], _x)
                 return _h, _o["output"]
 
-            _, vjp = jax.vjp(_fn, module.variables["params"]["cell"])
+            _, vjp = jax.vjp(_fn, module.variables["params"]["cell"], x)
 
             # Gather some additional logging information
             fn_out = {
@@ -299,7 +299,7 @@ class ForwardBPTTRNN(nn.Module):
             # readout needed for the gradient
             # NOTE: this is why having stop_gradients=readout is important, otherwise the
             # parameters within the recurrence would receive too times the right gradient
-            (grad_params,) = vjp(
+            grad_params, grad_inputs = vjp(
                 (
                     delta_h.astype(base_carry_precision),
                     delta_out,
@@ -308,7 +308,7 @@ class ForwardBPTTRNN(nn.Module):
 
             return (
                 {"params": {"cell": grad_params}},
-                jnp.zeros_like(inputs),
+                grad_inputs,
                 jnp.zeros_like(targets),
                 jnp.zeros_like(masks),
             )
