@@ -18,7 +18,7 @@ from online_bptt.model.network import RNN
 def parameter_conversion_normal_to_forward(params):
     if "params" in params.keys():
         return {"params": parameter_conversion_normal_to_forward(params["params"])}
-    
+
     converted_params = {}
     for key, value in params.items():
         i = key.split("_")[-1]  # index of the layer
@@ -40,7 +40,7 @@ def create_model(
     """
     Helper function to create a model and convert parameters if needed.
     """
-    assert cfg.model.training_mode in ["normal", "forward", "forward_forward"]
+    assert cfg.model.training_mode in ["normal", "spatial", "forward", "forward_forward"]
 
     if cfg.model.cell == "gru":
         cell_type = partial(
@@ -89,8 +89,13 @@ def create_model(
     )
 
     # Always create a model trained in normal mode, to directly use it, or to use its params as ref
+    training_mode_ref = (
+        "normal"
+        if cfg.model.training_mode in ["forward", "forward_forward"]
+        else cfg.model.training_mode
+    )
     BatchedRNN = nn.vmap(
-        partial(model, training_mode="normal"),
+        partial(model, training_mode=training_mode_ref),
         in_axes=0,
         out_axes=0,
         variable_axes={"params": None},
@@ -111,4 +116,3 @@ def create_model(
         params = parameter_conversion_normal_to_forward(params)
 
     return params, batched_model
-

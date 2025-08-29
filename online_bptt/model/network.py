@@ -12,6 +12,7 @@ class StandardLayer(nn.Module):
     cell_type: nn.Module = GRUCell
     dtype: Any = jnp.float32
     unroll: int = 1
+    stop_gradients: str = "none"
 
     def setup(self):
         self.layer = nn.scan(
@@ -21,7 +22,12 @@ class StandardLayer(nn.Module):
             in_axes=0,
             out_axes=0,
             unroll=self.unroll,
-        )(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
+        )(
+            hidden_dim=self.hidden_dim,
+            output_dim=self.output_dim,
+            dtype=self.dtype,
+            stop_gradients=self.stop_gradients,
+        )
 
     def __call__(self, x, init_carry=None):
         if init_carry is None:
@@ -197,7 +203,6 @@ class ForwardBPTTLayer(nn.Module):
         self.base_carry_precision = self.inner_cell.carry_dtype(self.base_precision)
 
     def __call__(self, x):
-        
 
         def f(module, x):
             # If the module is just used for forward pass, just do one pass and return the output.
@@ -304,15 +309,16 @@ class RNN(nn.Module):
     two_passes: bool = True
     approx_inverse: bool = False
     norm_before_readout: bool = True
-        
+
     @nn.compact
     def __call__(self, x):
-        if self.training_mode == "normal":
+        if self.training_mode in ["normal", "spatial"]:
             Layer = StandardLayer
             kwargs = {
                 "cell_type": self.cell_type,
                 "dtype": self.dtype,
                 "unroll": self.unroll,
+                "stop_gradients": "none" if self.training_mode == "normal" else "spatial",
             }
         elif self.training_mode in ["forward", "forward_forward"]:
             Layer = ForwardBPTTLayer

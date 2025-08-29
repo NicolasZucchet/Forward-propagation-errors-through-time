@@ -106,6 +106,7 @@ class Cell(nn.Module, metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def recurrence(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         """The core recurrence function of the cell."""
+        # NOTE: spatial stop_gradients has to be implemented in subclasses
         pass
 
     def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
@@ -179,7 +180,12 @@ class LRUCell(Cell):
             diag_lambda = jax.lax.stop_gradient(diag_lambda)
 
         # Recurrence: h_t+1 = lambda * h_t + B * x_t
-        new_h = diag_lambda * h + gamma * self.B(x)
+        new_h = gamma * self.B(x)
+        if self.stop_gradients in ["spatial"]:
+            new_h += jax.lax.stop_gradient(diag_lambda * h)
+        else:
+            new_h += diag_lambda * h
+
         return new_h
 
     def recurrence_jacobian(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
@@ -248,9 +254,14 @@ class GRUCell(Cell):
             self.layer_norm = nn.LayerNorm(dtype=self.dtype)
 
     def recurrence(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
-        r = nn.sigmoid(self.dense_ir(x) + self.dense_hr(h))
-        z = nn.sigmoid(self.dense_iz(x) + self.dense_hz(h))
-        n = nn.tanh(self.dense_in(x) + r * self.dense_hn(h))
+        if self.stop_gradients in ["spatial"]:
+            r = nn.sigmoid(self.dense_ir(x) + jax.lax.stop_gradient(self.dense_hr(h)))
+            z = nn.sigmoid(self.dense_iz(x) + jax.lax.stop_gradient(self.dense_hz(h)))
+            n = nn.tanh(self.dense_in(x) + r * jax.lax.stop_gradient(self.dense_hn(h)))
+        else:
+            r = nn.sigmoid(self.dense_ir(x) + self.dense_hr(h))
+            z = nn.sigmoid(self.dense_iz(x) + self.dense_hz(h))
+            n = nn.tanh(self.dense_in(x) + r * self.dense_hn(h))
         new_h = (1.0 - z) * n + z * h
         return new_h
 
@@ -438,6 +449,7 @@ class EUNNCell(Cell):
 
     def recurrence(self, h: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
         v = self._apply_layers_vec(h)
+        v = jax.lax.stop_gradient(v) if self.stop_gradients in ["spatial"] else v
         preact = v + self.B(x)
         new_h = self._apply_nonlinearity(preact)
         return new_h.astype(jnp.complex128 if self.dtype == jnp.float64 else jnp.complex64)
