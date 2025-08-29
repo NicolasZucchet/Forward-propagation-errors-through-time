@@ -5,6 +5,7 @@ defaults:
 seed: 42
 
 model:
+  n_layers: 1
   cell: "gru" # "gru" or "lru"
   lru_r_min: 0.0
   lru_r_max: 1.0
