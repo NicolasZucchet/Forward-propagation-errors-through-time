@@ -7,9 +7,9 @@ import pytest
 
 from .model.network import (
     ForwardBPTTCell,
-    ForwardBPTTRNN,
-    StandardRNN,
+    RNN,
 )
+from .model_factory import parameter_conversion_normal_to_forward
 from .model.cells import GRUCell, EUNNCell, LRUCell
 from .utils import check_grad_all
 
@@ -40,32 +40,28 @@ def setup_data():
 def test_forward_bptt_cell_single_step(setup_data, cell_class):
     key, input_dim, hidden_dim, output_dim, _ = setup_data
 
-    dummy_x = jnp.ones((input_dim,))
-    dummy_y = jnp.ones((output_dim,))
-    dummy_m = jnp.ones((1,))
-    dummy_batch = (dummy_x, dummy_y, dummy_m)
+    dummy_x = jnp.ones((input_dim,), dtype=jnp.float32)
+    dummy_y = jnp.ones((output_dim,), dtype=jnp.float32)
 
     forward_bptt_cell = ForwardBPTTCell(
         hidden_dim=hidden_dim,
         output_dim=output_dim,
-        loss_fn=mse_loss,
         cell_type=cell_class,
     )
     initial_carry = forward_bptt_cell.initialize_carry(
         key, (input_dim,), dtype=jnp.float32, diagonal_jacobian=isinstance(cell_class, LRUCell)
     )
 
-    params = forward_bptt_cell.init(key, initial_carry, dummy_batch)
+    params = forward_bptt_cell.init(key, initial_carry, (dummy_x, dummy_y))
 
-    new_carry, out = forward_bptt_cell.apply(params, initial_carry, dummy_batch)
+    new_carry, out = forward_bptt_cell.apply(params, initial_carry, (dummy_x, dummy_y))
 
-    new_h, new_delta, new_inst_delta, new_prod_jac, new_mean, new_t = new_carry
+    new_h, new_delta, new_inst_delta, new_prod_jac = new_carry
 
     assert new_h.shape == (hidden_dim,)
     assert new_delta.shape == (hidden_dim,)
     assert new_inst_delta.shape == (hidden_dim,)
     assert new_prod_jac.shape == (hidden_dim, hidden_dim)
-    assert new_mean.shape == (output_dim,)
     assert "output" in out
 
 
@@ -75,24 +71,19 @@ def test_forward_bptt_rnn_sequence(setup_data, cell_class):
     key = random.PRNGKey(42)
 
     dummy_inputs = jnp.ones((seq_len, input_dim))
-    dummy_targets = jnp.ones((seq_len, output_dim))
-    dummy_mask = jnp.ones((seq_len,)).at[: seq_len // 2].set(0.0)  # Half of the sequence is masked
-    dummy_batch = {"input": dummy_inputs, "target": dummy_targets, "mask": dummy_mask}
 
-    forward_bptt_rnn = ForwardBPTTRNN(
+    forward_bptt_rnn = RNN(
         hidden_dim=hidden_dim,
         output_dim=output_dim,
-        cell=partial(ForwardBPTTCell, loss_fn=mse_loss, cell_type=cell_class),
+        training_mode="forward_forward",
+        cell_type=cell_class,
     )
 
-    params = forward_bptt_rnn.init(key, dummy_batch)
+    params = forward_bptt_rnn.init(key, dummy_inputs)
 
-    outputs = forward_bptt_rnn.apply(
-        params,
-        dummy_batch,
-    )
+    outputs = forward_bptt_rnn.apply(params, dummy_inputs)
 
-    assert outputs["output"].shape == (seq_len, output_dim)
+    assert outputs.shape == (seq_len, output_dim)
 
 
 @pytest.mark.parametrize("cell_class", [GRUCell, LRUCell, EUNNCell])
@@ -106,67 +97,37 @@ def test_forward_bptt_rnn_backward_pass(setup_data, cell_class):
     dummy_batch = {"input": dummy_inputs, "target": dummy_targets, "mask": dummy_mask}
 
     pooling = "cumulative_mean"  # NOTE: important to test pooling as it can change quite a bit gradient computation
-    forward_bptt_rnn = ForwardBPTTRNN(
+    rnn_func = partial(
+        RNN,
         hidden_dim=hidden_dim,
         output_dim=output_dim,
-        cell=partial(
-            ForwardBPTTCell,
-            loss_fn=mse_loss,
-            increased_precision=dtype,
-            base_precision=dtype,
-            cell_type=cell_class,
-        ),
         increased_precision=dtype,
         base_precision=dtype,
-        pooling=pooling,
-    )
-
-    params = forward_bptt_rnn.init(key, dummy_batch)
-
-    standard_rnn = StandardRNN(
-        hidden_dim=hidden_dim,
-        output_dim=output_dim,
-        dtype=dtype,
         cell_type=cell_class,
         pooling=pooling,
     )
-    standard_params = standard_rnn.init(jax.random.PRNGKey(0), dummy_batch)
+    forward_bptt_rnn = rnn_func(training_mode="forward_forward")
+    standard_rnn = rnn_func(training_mode="normal")
 
-    # Manually copy the weights to compare the same model
-    cell_params = params["params"]["ScanForwardBPTTCell_0"]["cell"]
-    cell_name = list(standard_params["params"].keys())[0]
-    standard_params["params"][cell_name] = cell_params
+    standard_params = standard_rnn.init(key, dummy_inputs)
+    params = parameter_conversion_normal_to_forward(standard_params)
 
-    def standard_loss_fn(p, ic, b):
-        y_hat = standard_rnn.apply({"params": p}, b, init_carry=ic)["output"]
+    def loss_fn(model, p, b):
+        y_hat = model.apply(p, b["input"])
         return full_loss(y_hat, b["target"], b["mask"])
 
-    loss_bptt, (grad_bptt, _) = jax.value_and_grad(standard_loss_fn, argnums=(0, 1))(
-        standard_params["params"],
-        standard_rnn.apply(
-            standard_params,
-            jax.random.PRNGKey(0),
-            (input_dim,),
-            method=standard_rnn.initialize_carry,
-        ),
-        dummy_batch,
+    loss_bptt, grad_bptt = jax.value_and_grad(loss_fn, argnums=(1))(
+        standard_rnn, standard_params, dummy_batch
     )
 
-    def train_step(p, b):
-        def loss_fn(_p):
-            y_hat = forward_bptt_rnn.apply(_p, b)["output"]
-            return full_loss(y_hat, b["target"], b["mask"])
-
-        return jax.value_and_grad(loss_fn)(p)
-
-    loss, grads = train_step(params, dummy_batch)
+    loss, grads = jax.value_and_grad(loss_fn, argnums=(1))(
+        forward_bptt_rnn, params, dummy_batch
+    )
 
     assert jnp.allclose(loss, loss_bptt)
-
-    cell_grad_name = list(grad_bptt.keys())[0]
     check_grad_all(
-        grads["params"]["ScanForwardBPTTCell_0"]["cell"],
-        grad_bptt[cell_grad_name],
+        grads["params"]["ForwardBPTTLayer_0"]["layer"]["cell"],
+        grad_bptt["params"]["StandardLayer_0"]["layer"],
         rtol=1e-3,
     )
 

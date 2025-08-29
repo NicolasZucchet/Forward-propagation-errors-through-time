@@ -28,11 +28,10 @@ from online_bptt import metrics
 @partial(jax.jit, static_argnums=(0, 1, 2))
 def train_step(model, loss_fn, acc_fn, state, batch):
     def _loss_fn(params):
-        out = model.apply({"params": params}, batch)
-        pred = out.pop("output")
+        pred = model.apply({"params": params}, batch["input"])
         loss = loss_fn(pred, batch["target"], batch["mask"])
         acc = acc_fn(pred, batch["target"], batch["mask"])
-        return loss, {**out, "acc": acc}
+        return loss, {"acc": acc}
 
     (loss, extra), grads = jax.value_and_grad(_loss_fn, has_aux=True)(state.params)
     state = state.apply_gradients(grads=grads)
@@ -42,8 +41,8 @@ def train_step(model, loss_fn, acc_fn, state, batch):
 @partial(jax.jit, static_argnums=(0, 1, 2))
 def eval_step(model, loss_fn, acc_fn, state, batch):
     """Evaluates the model on the given dataloader."""
-    out = model.apply({"params": state.params}, batch)
-    pred = out.pop("output")
+    out = model.apply({"params": state.params}, batch["input"])
+    pred = out
     loss = loss_fn(pred, batch["target"], batch["mask"])
     acc = acc_fn(pred, batch["target"], batch["mask"])
     return {"loss": loss, "acc": acc}
@@ -104,7 +103,6 @@ def main(cfg: DictConfig) -> None:
         cfg,
         output_dim,
         seq_len,
-        loss_fn,
         base_precision,
         increased_precision,
         dummy_batch,

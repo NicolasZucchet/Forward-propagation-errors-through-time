@@ -3,18 +3,18 @@ import jax.numpy as jnp
 import flax.linen as nn
 from typing import Tuple, Callable, Any
 from online_bptt.model.cells import GRUCell, LRUCell, cumulative_mean_pooling
+from functools import partial
 
 
-class StandardRNN(nn.Module):
+class StandardLayer(nn.Module):
     hidden_dim: int
     output_dim: int
     cell_type: nn.Module = GRUCell
-    pooling: str = "none"  # "none" or "cumulative_mean" or "mean"
     dtype: Any = jnp.float32
     unroll: int = 1
 
     def setup(self):
-        self.rnn = nn.scan(
+        self.layer = nn.scan(
             self.cell_type,
             variable_broadcast="params",
             split_rngs={"params": False},
@@ -23,32 +23,19 @@ class StandardRNN(nn.Module):
             unroll=self.unroll,
         )(hidden_dim=self.hidden_dim, output_dim=self.output_dim, dtype=self.dtype)
 
-    def __call__(self, batch, init_carry=None):
+    def __call__(self, x, init_carry=None):
         if init_carry is None:
-            init_carry = self.initialize_carry(jax.random.PRNGKey(0), batch["input"].shape)
+            init_carry = self.initialize_carry(None, None)
 
-        _, out = self.rnn(init_carry, batch["input"])
-
-        if self.pooling == "cumulative_mean":
-            out["output"] = cumulative_mean_pooling(out["output"])
-        elif self.pooling == "mean":
-            out["output"] = (
-                jnp.cumsum(out["output"], axis=0)
-                / jnp.arange(1, out["output"].shape[0] + 1)[:, None]
-            )  # cumulative mean without stop gradient. NOTE: non-causal
-        elif self.pooling != "none":
-            raise ValueError(f"Unknown pooling type: {self.pooling}")
-
-        return out  # {'output': [T, O]}
+        return self.layer(init_carry, x)[1]  # {'output': [T, O]}
 
     def initialize_carry(self, key, input_shape):
-        return self.rnn.initialize_carry(key, input_shape)
+        return self.layer.initialize_carry(key, input_shape)
 
 
 class ForwardBPTTCell(nn.Module):
     hidden_dim: int
     output_dim: int
-    loss_fn: Callable
     cell_type: nn.Module = GRUCell
     base_precision: Any = jnp.float32
     increased_precision: Any = jnp.float64
@@ -66,21 +53,12 @@ class ForwardBPTTCell(nn.Module):
         self.diagonal_jacobian = isinstance(self.cell, LRUCell)
 
     def __call__(self, carry: Any, inputs: jnp.ndarray):
-        x, y, m = inputs  # x_t+1, y_t+1, m_t+1 (mask)
-        h, delta, inst_delta, prod_jac, prev_mean, t = (
-            carry  # h_t, delta_t, inst_delta_t, prod_jac_t, mean_t, t
-        )
+        x, delta_out = inputs  # x_t+1, delta_out_t+1 (error at output)
+        h, delta, inst_delta, prod_jac = carry  # h_t, delta_t, inst_delta_t, prod_jac_t
 
         # New hidden state (x: [X], h: [H])
         new_h = self.cell.recurrence(h, x)  # h_t+1: [H]
         out = self.cell.readout(new_h)  # pred_t+1: [O]
-        new_t = t + 1.0
-        if self.pooling == "cumulative_mean":
-            new_mean = (t * prev_mean + out) / new_t
-        elif self.pooling == "none":
-            new_mean = out  # Not used
-        else:
-            raise ValueError(f"Unknown pooling type: {self.pooling}")
 
         # New jacobian product: prod_t+1 = prod_t @ J_t^T
         jacobian = self.cell.recurrence_jacobian(
@@ -114,23 +92,14 @@ class ForwardBPTTCell(nn.Module):
             # delta_0
 
         # We compute the instantaneous delta for the next iteration as information is available now
-        # NOTE: giving the current h corresponds to having a straight-though cumulative mean
-        # pooling
-        def _straight_through_readout(_h):
-            current_out = self.cell.readout(_h)
-            return current_out + jax.lax.stop_gradient(new_mean - current_out)
+        (new_inst_delta,) = jax.vjp(self.cell.readout, new_h)[1](delta_out)  # [H]
 
-        new_inst_delta = jax.grad(lambda _h: self.loss_fn(_straight_through_readout(_h), y, m))(
-            new_h
-        )  # [H]
-
-        new_carry = new_h, new_delta, new_inst_delta, new_prod_jac, new_mean, new_t
+        new_carry = new_h, new_delta, new_inst_delta, new_prod_jac
         out = {
-            "output": new_mean,  # pred_t+1
+            "output": out,  # pred_t+1
             "prev_h": h,  # h_t
             "delta": new_delta,  # delta_t+1
             "inst_delta": new_inst_delta,  # inst_delta_t+1
-            "delta_output": jax.grad(lambda o: self.loss_fn(o, y, m))(new_mean),
             "h_norm": jnp.linalg.norm(new_h),
             "delta_norm": jnp.linalg.norm(new_delta),
             "prod_jac_norm": jnp.linalg.norm(new_prod_jac),
@@ -147,11 +116,10 @@ class ForwardBPTTCell(nn.Module):
                 "h": carry_base_precision,
                 "delta": carry_increased_precision,  # we need higher precision here as this quantity can explode
                 "inst_delta": carry_base_precision,
-                "prod_jac": carry_base_precision,  # TODO: needs higher precision?
-                "mean": self.base_precision,  # this is in output space, so always real
+                "prod_jac": carry_base_precision,
             }
         else:
-            return {k: dtype for k in ["h", "delta", "inst_delta", "prod_jac", "mean"]}
+            return {k: dtype for k in ["h", "delta", "inst_delta", "prod_jac"]}
 
     def initialize_carry(
         self, rng, input_shape, dtype=None, diagonal_jacobian=None
@@ -170,40 +138,35 @@ class ForwardBPTTCell(nn.Module):
             prod_jac = jnp.ones((self.hidden_dim,), dtype=dtypes["prod_jac"])
         else:
             prod_jac = jnp.eye(self.hidden_dim, dtype=dtypes["prod_jac"])
-        prev_mean = jnp.zeros((self.output_dim,), dtype=dtypes["mean"])
-        t = 0.0
-        return h, delta, inst_delta, prod_jac, prev_mean, t
+        return h, delta, inst_delta, prod_jac
 
 
-class ForwardBPTTRNN(nn.Module):
+class ForwardBPTTLayer(nn.Module):
     hidden_dim: int
     output_dim: int
+    length: int
     cell: nn.Module = ForwardBPTTCell
     base_precision: Any = jnp.float32
     increased_precision: Any = jnp.float64
     two_passes: bool = True  # start with non zero, correct delta_0
     norm_before_readout: bool = True
-    pooling: str = "none"  # "none" or "cumulative_mean"
     unroll: int = 1
 
-    @nn.compact
-    def __call__(self, batch):
+    def setup(self):
         if self.increased_precision == jnp.float32:
             print(
                 "WARNING: Using float32 precision may lead to numerical instability for forward BPTT!"
             )
 
-        inputs, targets, masks = batch["input"], batch["target"], batch["mask"]
-
         # Extended forward pass to include forward BPTT equations + how to use those results to
         # compute gradients
-        rnn = nn.scan(
+        self.layer = nn.scan(
             self.cell,
             variable_broadcast="params",
             split_rngs={"params": False},
             in_axes=0,
             out_axes=0,
-            length=inputs.shape[0],
+            length=self.length,
             unroll=self.unroll,
         )(
             hidden_dim=self.hidden_dim,
@@ -211,16 +174,16 @@ class ForwardBPTTRNN(nn.Module):
             base_precision=self.base_precision,
             increased_precision=self.increased_precision,
             norm_before_readout=self.norm_before_readout,
-            pooling=self.pooling,
         )
+        self.diagonal_jacobian = self.layer.diagonal_jacobian
 
         cell = self.cell(
             hidden_dim=self.hidden_dim,
             output_dim=self.output_dim,
             base_precision=self.base_precision,
             increased_precision=self.increased_precision,
-        )  # HACK: only use ForwardBPTTCell to get access to the inner cell
-        cell = cell.cell_type(
+        )  # HACK: only instantiate the ForwardBPTTCell to get access to the inner cell
+        self.inner_cell = cell.cell_type(
             hidden_dim=self.hidden_dim,
             output_dim=self.output_dim,
             dtype=self.base_precision,
@@ -228,27 +191,59 @@ class ForwardBPTTRNN(nn.Module):
             stop_gradients="readout",  # NOTE: needed for bwd
         )
 
-        def f(module, x, y, m):
+        # WARNING: it is important to setup the base precision in the setup (vs in a nn.compact
+        # call) to avoid closure problems as it is needed in the custom backward pass and jax does
+        # not support sending dtypes through the forward pass.
+        self.base_carry_precision = self.inner_cell.carry_dtype(self.base_precision)
+
+    def __call__(self, x):
+        
+
+        def f(module, x):
             # If the module is just used for forward pass, just do one pass and return the output.
-            init_carry = rnn.initialize_carry(None, None)
-            _, out = module(init_carry, (x, y, m))
+            init_carry = module.initialize_carry(None, None)
+            _delta_out = jnp.zeros(
+                (x.shape[0], self.output_dim), dtype=self.base_precision
+            )  # fake error
+            _, out = module(init_carry, (x, _delta_out))
             return out
 
-        def fwd(module, x, y, m):
-            init_carry = rnn.initialize_carry(None, None)
-            dtypes = rnn.carry_dtypes()
-            if self.two_passes:
-                # Step 1: run extended forward pass starting from the initial carry.
-                final_carry, _ = module(init_carry, (x, y, m))
+        def fwd(module, x):
+            # Run forward pass to get the output and the hidden states
+            out = f(module, x)
 
-                # Step 2: compute the new initial carry (in particular delta) and perform the second pass
-                _, final_delta, last_inst_delta, final_prod_jac, _, _ = final_carry
+            # Use the vanilla cell to get the delta to gradients mapping
+            def _fn(_p, _x):
+                _h, _o = self.inner_cell.apply({"params": _p}, out["prev_h"], _x)
+                return _h, _o["output"]
+
+            _, vjp = jax.vjp(_fn, module.variables["params"]["cell"], x)
+
+            # For closure reasons, we need to directly give the backward pass everything it needs.
+            # This includes jvp, forward pass through the ForwardBPTTCell layer and inputs.
+            to_bwd = (vjp, jax.tree_util.Partial(module.__call__), x)
+
+            return out, to_bwd
+
+        def bwd(from_forward, delta):
+            vjp, fwd_pass, x = from_forward
+            dtypes = self.layer.carry_dtypes()
+            delta_out = delta["output"]
+
+            # 1. First forward pass to determine delta_0
+            init_carry = self.layer.initialize_carry(None, None)
+            if self.two_passes:
+                # Run extended forward pass starting from the initial carry.
+                final_carry, _ = fwd_pass(init_carry, (x, delta_out))
+
+                # Use the first pass to compute the initial delta
+                _, final_delta, last_inst_delta, final_prod_jac = final_carry
                 # We use that:
-                #   1. delta_t - delta_t^BP = -prod_t' J_t'^{-T} delta_0^BP
-                #   2. delta_T^BP = inst_delta_T
+                #   - delta_t - delta_t^BP = -prod_t' J_t'^{-T} delta_0^BP
+                #   - delta_T^BP = inst_delta_T
                 # So that
                 # delta_0^BP = - (prod_t' J_t'^T) (delta_T - inst_delta_T)
-                if module.diagonal_jacobian:
+                if self.diagonal_jacobian:
                     delta_0 = -final_prod_jac * (final_delta - last_inst_delta)
                 else:
                     delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
@@ -258,23 +253,27 @@ class ForwardBPTTRNN(nn.Module):
                 # NOTE: this will not yield the true gradient
                 delta_0 = jnp.zeros((self.hidden_dim,), dtype=dtypes["delta"])
 
+            # 2. Second forward pass to compute the actual delta trajectory
             new_carry = tuple(init_carry[i] if i != 1 else delta_0 for i in range(len(init_carry)))
-            final_carry, out = module(new_carry, (x, y, m))
+            final_carry, out = fwd_pass(new_carry, (x, delta_out))
 
-            # To check wether that after the second pass, the final delta matches with the one of
-            # BPTT, that is the final instantaneous delta.
-            residual_error = final_carry[1] - final_carry[2]  # Useful for debugging
+            # Check that wether final delta matches with the one of BPTT, that is the final instantaneous delta.
+            residual_error = final_carry[1] - final_carry[2]  # Useful for debugging, should be 0
             residual_error_delta = jnp.linalg.norm(residual_error)
             norm_prod_jac = jnp.linalg.norm(final_carry[3])
 
-            # Step 3: get the JVP function to do error -> delta mapping. Use the vanilla cell for that.
-            def _fn(_p, _x):
-                _h, _o = cell.apply({"params": _p}, out["prev_h"], _x)
-                return _h, _o["output"]
+            # 3. Compute the actual gradients
+            delta_h = out["delta"]  # [T, H]
+            # NOTE: when using vjps, we use the base precision. The increased precision is only used
+            # when computing the deltas
+            delta_h = delta_h.astype(self.base_carry_precision)
 
-            _, vjp = jax.vjp(_fn, module.variables["params"]["cell"], x)
+            # NOTE: having stop_gradients=readout is important, otherwise the parameters within the
+            # recurrence also receive the delta_out backpropagated through the recurrence
+            grad_params, grad_inputs = vjp((delta_h, delta_out))  # PARAMS
 
-            # Gather some additional logging information
+            """
+            Logging to add back
             fn_out = {
                 "output": out["output"],  # predictions
                 "norm_prod_jac": norm_prod_jac,
@@ -283,35 +282,79 @@ class ForwardBPTTRNN(nn.Module):
                 "norm_final_delta_first_pass": jnp.linalg.norm(
                     final_delta if self.two_passes else final_carry[1]
                 ),
-            }  # We don't add all outputs here to avoid keeping too much information in memory.
+            }"""
 
-            return fn_out, (vjp, out)
-
-        def bwd(from_forward, _):  # NOTE: we ignore errors received from downstream graph
-            vjp, info = from_forward
-            delta_h = info["delta"]  # [T, H]
-            delta_out = info["delta_output"]  # [T, O]
-            # NOTE: when using vjps, we use the base precision. The increased precision is only used
-            # when computing the deltas
-            base_carry_precision = cell.carry_dtype(self.base_precision)
-
-            # Step 4: use the vjp to compute the partial derivatives of the recurrence and the
-            # readout needed for the gradient
-            # NOTE: this is why having stop_gradients=readout is important, otherwise the
-            # parameters within the recurrence would receive too times the right gradient
-            grad_params, grad_inputs = vjp(
-                (
-                    delta_h.astype(base_carry_precision),
-                    delta_out,
-                )
-            )  # PARAMS
-
-            return (
-                {"params": {"cell": grad_params}},
-                grad_inputs,
-                jnp.zeros_like(targets),
-                jnp.zeros_like(masks),
-            )
+            return {"params": {"cell": grad_params}}, grad_inputs
 
         custom_f = nn.custom_vjp(fn=f, forward_fn=fwd, backward_fn=bwd)
-        return custom_f(rnn, inputs, targets, masks)
+        return custom_f(self.layer, x)
+
+
+class RNN(nn.Module):
+    hidden_dim: int
+    output_dim: int
+    training_mode: str
+    cell_type: nn.Module = GRUCell
+    n_layers: int = 1
+    pooling: str = "none"  # "none" or "cumulative_mean" or "mean"
+    dtype: Any = jnp.float32
+    unroll: int = 1
+    base_precision: Any = jnp.float32
+    increased_precision: Any = jnp.float64
+    two_passes: bool = True
+    approx_inverse: bool = False
+    norm_before_readout: bool = True
+        
+    @nn.compact
+    def __call__(self, x):
+        if self.training_mode == "normal":
+            Layer = StandardLayer
+            kwargs = {
+                "cell_type": self.cell_type,
+                "dtype": self.dtype,
+                "unroll": self.unroll,
+            }
+        elif self.training_mode in ["forward", "forward_forward"]:
+            Layer = ForwardBPTTLayer
+            kwargs = {
+                "cell": partial(
+                    ForwardBPTTCell,
+                    cell_type=self.cell_type,
+                    base_precision=self.base_precision,
+                    increased_precision=self.increased_precision,
+                    approx_inverse=self.approx_inverse,
+                    norm_before_readout=self.norm_before_readout,
+                    pooling=self.pooling,
+                ),
+                "base_precision": self.base_precision,
+                "increased_precision": self.increased_precision,
+                "two_passes": self.training_mode == "forward_forward",
+                "unroll": self.unroll,
+                "length": x.shape[0],
+            }
+        else:
+            raise ValueError(f"Unknown training mode: {self.training_mode}")
+
+        layers = [
+            Layer(
+                hidden_dim=self.hidden_dim,
+                output_dim=self.hidden_dim if i < self.n_layers - 1 else self.output_dim,
+                **kwargs,
+            )
+            for i in range(self.n_layers)
+        ]
+
+        out = x
+        for i, layer in enumerate(layers):
+            out = layer(out)["output"]
+
+        if self.pooling == "cumulative_mean":
+            out = cumulative_mean_pooling(out)
+        elif self.pooling == "mean":
+            out = (
+                jnp.cumsum(out, axis=0) / jnp.arange(1, out.shape[0] + 1)[:, None]
+            )  # cumulative mean without stop gradient. NOTE: non-causal in the backward pass
+        elif self.pooling != "none":
+            raise ValueError(f"Unknown pooling type: {self.pooling}")
+
+        return out

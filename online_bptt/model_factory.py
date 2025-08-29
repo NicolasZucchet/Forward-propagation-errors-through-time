@@ -12,14 +12,26 @@ from online_bptt.model.cells import (
     LRUCell,
     EUNNCell,
 )
-from online_bptt.model.network import StandardRNN, ForwardBPTTRNN, ForwardBPTTCell
+from online_bptt.model.network import RNN
+
+
+def parameter_conversion_normal_to_forward(params):
+    if "params" in params.keys():
+        return {"params": parameter_conversion_normal_to_forward(params["params"])}
+    
+    converted_params = {}
+    for key, value in params.items():
+        i = key.split("_")[-1]  # index of the layer
+        new_key = f"ForwardBPTTLayer_{i}"
+        converted_value = {"layer": {"cell": value["layer"]}}
+        converted_params[new_key] = converted_value
+    return converted_params
 
 
 def create_model(
     cfg: DictConfig,
     output_dim: int,
     seq_len: int,
-    loss_fn: Callable,
     base_precision: Any,
     increased_precision: Any,
     batch: dict,
@@ -60,65 +72,43 @@ def create_model(
     else:
         raise ValueError(f"Unknown cell type: {cfg.model.cell}")
 
+    model = partial(
+        RNN,
+        hidden_dim=cfg.model.hidden_dim,
+        output_dim=output_dim,
+        cell_type=cell_type,
+        n_layers=cfg.model.n_layers,
+        pooling=cfg.model.pooling,
+        dtype=base_precision,
+        unroll=cfg.model.unroll,
+        base_precision=base_precision,
+        increased_precision=increased_precision,
+        two_passes=cfg.model.training_mode == "forward_forward",
+        approx_inverse=cfg.model.approx_inverse,
+        norm_before_readout=cfg.model.norm_before_readout,
+    )
+
+    # Always create a model trained in normal mode, to directly use it, or to use its params as ref
     BatchedRNN = nn.vmap(
-        partial(
-            StandardRNN,
-            cell_type=cell_type,
-            pooling=cfg.model.pooling,
-            dtype=base_precision,
-            unroll=cfg.model.unroll,
-        ),
+        partial(model, training_mode="normal"),
         in_axes=0,
         out_axes=0,
         variable_axes={"params": None},
         split_rngs={"params": False},
     )
-    batched_model = BatchedRNN(
-        hidden_dim=cfg.model.hidden_dim,
-        output_dim=output_dim,
-        dtype=base_precision,
-    )
-    params = batched_model.init(key, batch)["params"]
+    batched_model = BatchedRNN()
+    params = batched_model.init(key, batch["input"])["params"]
 
     if cfg.model.training_mode in ["forward", "forward_forward"]:
-        # Overwrite the model to use the correct one, and convert parameters
-        model = partial(
-            ForwardBPTTRNN,
-            cell=partial(
-                ForwardBPTTCell,
-                cell_type=cell_type,
-                loss_fn=loss_fn,
-                base_precision=base_precision,
-                increased_precision=increased_precision,
-                approx_inverse=cfg.model.approx_inverse,
-                norm_before_readout=cfg.model.norm_before_readout,
-                pooling=cfg.model.pooling,
-            ),
-            base_precision=base_precision,
-            increased_precision=increased_precision,
-            two_passes=cfg.model.training_mode == "forward_forward",
-            pooling=cfg.model.pooling,
-        )
         BatchedRNN = nn.vmap(
-            model,
+            partial(model, training_mode=cfg.model.training_mode),
             in_axes=0,
             out_axes=0,
             variable_axes={"params": None},
             split_rngs={"params": False},
         )
-        batched_model = BatchedRNN(
-            hidden_dim=cfg.model.hidden_dim,
-            output_dim=output_dim,
-            base_precision=base_precision,
-            increased_precision=increased_precision,
-        )
-        params = conversion_params_normal_to_forwardbptt(params, cell_name=cfg.model.cell.upper())
+        batched_model = BatchedRNN()
+        params = parameter_conversion_normal_to_forward(params)
 
     return params, batched_model
 
-
-def conversion_params_normal_to_forwardbptt(params: dict, cell_name: str = "GRU") -> dict:
-    """
-    Convert parameters from StandardRNN to ForwardBPTTRNN format.
-    """
-    return {"ScanForwardBPTTCell_0": {f"cell": params[f"rnn"]}}
