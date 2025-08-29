@@ -309,45 +309,73 @@ class RNN(nn.Module):
     two_passes: bool = True
     approx_inverse: bool = False
     norm_before_readout: bool = True
+    forward_simulation_passes: int = 2 # None
 
     @nn.compact
     def __call__(self, x):
         if self.training_mode in ["normal", "spatial"]:
-            Layer = StandardLayer
-            kwargs = {
-                "cell_type": self.cell_type,
-                "dtype": self.dtype,
-                "unroll": self.unroll,
-                "stop_gradients": "none" if self.training_mode == "normal" else "spatial",
-            }
+            layers = [StandardLayer] * self.n_layers
+            kwargs = [
+                {
+                    "cell_type": self.cell_type,
+                    "dtype": self.dtype,
+                    "unroll": self.unroll,
+                    "stop_gradients": "none" if self.training_mode == "normal" else "spatial",
+                }
+            ] * self.n_layers
         elif self.training_mode in ["forward", "forward_forward"]:
-            Layer = ForwardBPTTLayer
-            kwargs = {
-                "cell": partial(
-                    ForwardBPTTCell,
-                    cell_type=self.cell_type,
-                    base_precision=self.base_precision,
-                    increased_precision=self.increased_precision,
-                    approx_inverse=self.approx_inverse,
-                    norm_before_readout=self.norm_before_readout,
-                    pooling=self.pooling,
-                ),
-                "base_precision": self.base_precision,
-                "increased_precision": self.increased_precision,
-                "two_passes": self.training_mode == "forward_forward",
-                "unroll": self.unroll,
-                "length": x.shape[0],
-            }
+            # If forward_simulation_passes is set, we simulate running the algorithm for a given
+            # number of forward passes
+            # If 1, all layers are in spatial mode
+            # If 2, all layers are in spatial mode except the last one
+            # And so on
+            # Otherwise, we just use forward backpropagation everywhere
+            layers, kwargs = [], []
+            forward_simulation_passes = self.forward_simulation_passes or self.n_layers + 1
+            for i in range(self.n_layers):
+                if self.n_layers - i >= forward_simulation_passes:
+                    # Standard layer with spatial backprop
+                    layers.append(StandardLayer)
+                    kwargs.append(
+                        {
+                            "cell_type": self.cell_type,
+                            "dtype": self.dtype,
+                            "unroll": self.unroll,
+                            "stop_gradients": "spatial",
+                            "name": f"StandardLayer_{i}"
+                        }
+                    )
+                else:
+                    layers.append(ForwardBPTTLayer)
+                    kwargs.append(
+                        {
+                            "cell": partial(
+                                ForwardBPTTCell,
+                                cell_type=self.cell_type,
+                                base_precision=self.base_precision,
+                                increased_precision=self.increased_precision,
+                                approx_inverse=self.approx_inverse,
+                                norm_before_readout=self.norm_before_readout,
+                                pooling=self.pooling,
+                            ),
+                            "base_precision": self.base_precision,
+                            "increased_precision": self.increased_precision,
+                            "two_passes": self.training_mode == "forward_forward",
+                            "unroll": self.unroll,
+                            "length": x.shape[0],
+                            "name": f"ForwardBPTTLayer_{i}"
+                        }
+                    )
         else:
             raise ValueError(f"Unknown training mode: {self.training_mode}")
 
         layers = [
-            Layer(
+            layer(
                 hidden_dim=self.hidden_dim,
                 output_dim=self.hidden_dim if i < self.n_layers - 1 else self.output_dim,
-                **kwargs,
+                **kwarg,
             )
-            for i in range(self.n_layers)
+            for i, (layer, kwarg) in enumerate(zip(layers, kwargs))
         ]
 
         out = x

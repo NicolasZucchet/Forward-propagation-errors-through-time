@@ -20,6 +20,7 @@ model:
   pooling: "none"
   unroll: 1
   freeze_recurrence: false
+  forward_simulation_passes:  # default is None
 
 training:
   optimizer: "adamw"

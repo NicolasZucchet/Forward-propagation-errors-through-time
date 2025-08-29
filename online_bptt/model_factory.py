@@ -15,16 +15,25 @@ from online_bptt.model.cells import (
 from online_bptt.model.network import RNN
 
 
-def parameter_conversion_normal_to_forward(params):
+def parameter_conversion_normal_to_forward(params, example_params):
     if "params" in params.keys():
-        return {"params": parameter_conversion_normal_to_forward(params["params"])}
+        return {
+            "params": parameter_conversion_normal_to_forward(
+                params["params"], example_params["params"]
+            )
+        }
 
     converted_params = {}
-    for key, value in params.items():
-        i = key.split("_")[-1]  # index of the layer
-        new_key = f"ForwardBPTTLayer_{i}"
-        converted_value = {"layer": {"cell": value["layer"]}}
-        converted_params[new_key] = converted_value
+    example_keys = list(example_params.keys())
+    for (key, value) in params.items():
+        new_key = [k for k in example_keys if k.endswith(f"_{key.split('_')[-1]}")]
+        assert len(new_key) == 1
+        if new_key[0].startswith("ForwardBPTTLayer"):
+            converted_value = {"layer": {"cell": value["layer"]}}
+        else:
+            converted_value = value
+        converted_params[new_key[0]] = converted_value
+
     return converted_params
 
 
@@ -86,6 +95,7 @@ def create_model(
         two_passes=cfg.model.training_mode == "forward_forward",
         approx_inverse=cfg.model.approx_inverse,
         norm_before_readout=cfg.model.norm_before_readout,
+        forward_simulation_passes=cfg.model.forward_simulation_passes,
     )
 
     # Always create a model trained in normal mode, to directly use it, or to use its params as ref
@@ -113,6 +123,7 @@ def create_model(
             split_rngs={"params": False},
         )
         batched_model = BatchedRNN()
-        params = parameter_conversion_normal_to_forward(params)
+        example_params = batched_model.init(key, batch["input"])["params"]
+        params = parameter_conversion_normal_to_forward(params, example_params)
 
     return params, batched_model
