@@ -1,0 +1,39 @@
+program: online_bptt/train.py
+method: grid
+name: mnist98 lru comparison
+metric:
+  name: acc
+  goal: maximize
+parameters:
+  data:
+    value: mnist98
+  training.learning_rate:
+    values: [1e-4, 3e-4, 1e-3, 3e-3, 1e-2]
+  training.weight_decay:
+    value: 0.01
+  model.training_mode:
+    values: ["normal", "spatial", "forward", "forward_forward"]
+  data.n_samples:
+    value: 1000000 # 20 epochs
+  model.hidden_dim:
+    value: 32
+  model.n_layers:
+    value: 1
+  model.lru_r_min:
+    values: [0.9, 0.99]
+  training.log_every_steps:
+    value: 200
+  model.pooling:
+    value: "cumulative_mean"
+  model.cell:
+    value: "lru"
+  model.unroll:
+    value: 1
+  seed:
+    values: [421, 1234, 2025]
+  
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
