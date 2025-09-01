@@ -115,8 +115,13 @@ def main(cfg: DictConfig) -> None:
             init_value=cfg.training.learning_rate,
             decay_steps=n_train_steps,
         )
+        lr_rec = optax.cosine_decay_schedule(
+            init_value=cfg.training.recurrent_lr_factor * cfg.training.learning_rate,
+            decay_steps=n_train_steps,
+        )
     elif cfg.training.scheduler == "constant":
         lr = cfg.training.learning_rate
+        lr_rec = cfg.training.learning_rate * cfg.training.recurrent_lr_factor
     else:
         raise ValueError(f"Unknown scheduler: {cfg.training.scheduler}")
     optimizer_name = cfg.training.get("optimizer", "adam")
@@ -134,7 +139,7 @@ def main(cfg: DictConfig) -> None:
             optax.multi_transform(
                 {
                     "non_recurrent": optax.adamw(lr, weight_decay=cfg.training.weight_decay),
-                    "recurrent": optax.adam(lr),
+                    "recurrent": optax.adam(lr_rec),
                 },
                 param_labels,
             ),
@@ -142,7 +147,13 @@ def main(cfg: DictConfig) -> None:
     elif optimizer_name == "adam":
         optimizer = optax.chain(
             optax.clip_by_global_norm(cfg.training.gradient_clipping),
-            optax.adam(lr),
+            optax.multi_transform(
+                {
+                    "non_recurrent": optax.adam(lr),
+                    "recurrent": optax.adam(lr_rec),
+                },
+                param_labels,
+            ),
         )
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_name}")
