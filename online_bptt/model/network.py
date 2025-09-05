@@ -4,7 +4,9 @@ import flax.linen as nn
 from typing import Tuple, Callable, Any
 from online_bptt.model.cells import GRUCell, LRUCell, cumulative_mean_pooling
 from functools import partial
+from utils import get_logger
 
+logger = get_logger()
 
 class StandardLayer(nn.Module):
     hidden_dim: int
@@ -277,17 +279,16 @@ class ForwardBPTTLayer(nn.Module):
             # recurrence also receive the delta_out backpropagated through the recurrence
             grad_params, grad_inputs = vjp((delta_h, delta_out))  # PARAMS
 
-            """
-            Logging to add back
-            fn_out = {
-                "output": out["output"],  # predictions
-                "norm_prod_jac": norm_prod_jac,
-                "residual_error_delta": residual_error_delta,
-                "norm_delta_0": jnp.linalg.norm(delta_0),
-                "norm_final_delta_first_pass": jnp.linalg.norm(
+            # Log some metrics about the backward pass
+            logs = {
+                f"log/{self.name}/norm_prod_jac": norm_prod_jac,
+                f"log/{self.name}/residual_error_delta": residual_error_delta,
+                f"log/{self.name}/norm_delta_0": jnp.linalg.norm(delta_0),
+                f"log/{self.name}/norm_final_delta_first_pass": jnp.linalg.norm(
                     final_delta if self.two_passes else final_carry[1]
                 ),
-            }"""
+            }
+            jax.debug.callback(logger.log_callback, logs)
 
             return {"params": {"cell": grad_params}}, grad_inputs
 

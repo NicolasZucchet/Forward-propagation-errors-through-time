@@ -23,6 +23,10 @@ from flax import traverse_util
 from online_bptt.data import create_dataloaders
 from online_bptt.model_factory import create_model
 from online_bptt import metrics
+from online_bptt.utils import get_logger
+
+
+logger = get_logger()
 
 
 @partial(jax.jit, static_argnums=(0, 1, 2))
@@ -168,6 +172,11 @@ def main(cfg: DictConfig) -> None:
         batch = jax.tree.map(lambda x: x.astype(base_precision), batch)
         state, loss, extra = train_step(model, full_loss_fn, full_accuracy_fn, state, batch)
 
+        # Add logs to extra
+        logs = logger.get_logs_and_clear()
+        for l in logs:
+            extra.update(l)
+
         current_log = {"loss": loss, **extra}
         if log_accumulator is None:
             log_accumulator = jax.tree.map(jnp.zeros_like, current_log)
@@ -180,7 +189,13 @@ def main(cfg: DictConfig) -> None:
             txt = f"Step {step}, Loss: {log_dict['loss']:.4f}, Accuracy: {log_dict['acc']:.4f}"
             pbar.set_description(txt)
             if cfg.training.wandb_log:
-                wandb.log({f"train/{k}": v.item() for k, v in log_dict.items()}, step=step)
+                wandb.log(
+                    {
+                        f"train/{k}" if not k.startswith("log") else k: v.item()
+                        for k, v in log_dict.items()
+                    },
+                    step=step,
+                )
             log_accumulator = jax.tree.map(jnp.zeros_like, log_accumulator)
 
         # Eval whenever wanted
