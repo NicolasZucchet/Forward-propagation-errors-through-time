@@ -38,6 +38,12 @@ def train_step(model, loss_fn, acc_fn, state, batch):
         return loss, {"acc": acc}
 
     (loss, extra), grads = jax.value_and_grad(_loss_fn, has_aux=True)(state.params)
+
+    # Compute norm of the gradient (flatten it before)
+    grad_flat, _ = jax.flatten_util.ravel_pytree(grads)
+    grad_norm = jnp.linalg.norm(grad_flat)
+    extra["grad_norm"] = grad_norm
+
     state = state.apply_gradients(grads=grads)
     return state, loss, extra
 
