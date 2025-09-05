@@ -8,6 +8,7 @@ from utils import get_logger
 
 logger = get_logger()
 
+
 class StandardLayer(nn.Module):
     hidden_dim: int
     output_dim: int
@@ -241,7 +242,7 @@ class ForwardBPTTLayer(nn.Module):
             init_carry = self.layer.initialize_carry(None, None)
             if self.two_passes:
                 # Run extended forward pass starting from the initial carry.
-                final_carry, _ = fwd_pass(init_carry, (x, delta_out))
+                final_carry, out = fwd_pass(init_carry, (x, delta_out))
 
                 # Use the first pass to compute the initial delta
                 _, final_delta, last_inst_delta, final_prod_jac = final_carry
@@ -255,10 +256,15 @@ class ForwardBPTTLayer(nn.Module):
                 else:
                     delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
 
+                # Log extremum values of delta
+                max_delta_1 = jnp.max(jnp.abs(out["delta"]))
+                mean_delta_1 = jnp.mean(jnp.abs(out["delta"]))
+
             else:
                 # Just start directly at delta=0.
                 # NOTE: this will not yield the true gradient
                 delta_0 = jnp.zeros((self.hidden_dim,), dtype=dtypes["delta"])
+                mean_delta_1, max_delta_1 = None, None
 
             # 2. Second forward pass to compute the actual delta trajectory
             new_carry = tuple(init_carry[i] if i != 1 else delta_0 for i in range(len(init_carry)))
@@ -287,6 +293,11 @@ class ForwardBPTTLayer(nn.Module):
                 f"log/{self.name}/norm_final_delta_first_pass": jnp.linalg.norm(
                     final_delta if self.two_passes else final_carry[1]
                 ),
+                f"log/{self.name}/max_delta_1": max_delta_1,
+                f"log/{self.name}/mean_delta_1": mean_delta_1,
+                f"log/{self.name}/min_delta_2": jnp.mean(jnp.abs(delta_h)),
+                f"log/{self.name}/max_delta_2": jnp.max(jnp.abs(delta_h)),
+                f"log/{self.name}/mean_delta_2": jnp.mean(jnp.abs(delta_h)),
             }
             jax.debug.callback(logger.log_callback, logs)
 
@@ -310,7 +321,7 @@ class RNN(nn.Module):
     two_passes: bool = True
     approx_inverse: bool = False
     norm_before_readout: bool = True
-    forward_simulation_passes: int = 2 # None
+    forward_simulation_passes: int = 2  # None
 
     @nn.compact
     def __call__(self, x):
@@ -343,7 +354,7 @@ class RNN(nn.Module):
                             "dtype": self.dtype,
                             "unroll": self.unroll,
                             "stop_gradients": "spatial",
-                            "name": f"StandardLayer_{i}"
+                            "name": f"StandardLayer_{i}",
                         }
                     )
                 else:
@@ -364,7 +375,7 @@ class RNN(nn.Module):
                             "two_passes": self.training_mode == "forward_forward",
                             "unroll": self.unroll,
                             "length": x.shape[0],
-                            "name": f"ForwardBPTTLayer_{i}"
+                            "name": f"ForwardBPTTLayer_{i}",
                         }
                     )
         else:
