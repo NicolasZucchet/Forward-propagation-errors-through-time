@@ -4,7 +4,7 @@ import flax.linen as nn
 from typing import Tuple, Callable, Any
 from online_bptt.model.cells import GRUCell, LRUCell, cumulative_mean_pooling
 from functools import partial
-from utils import get_logger
+from online_bptt.utils import get_logger
 
 logger = get_logger()
 
@@ -252,6 +252,7 @@ class ForwardBPTTLayer(nn.Module):
                 # So that
                 # delta_0^BP = - (prod_t' J_t'^T) (delta_T - inst_delta_T)
                 if self.diagonal_jacobian:
+                    last_inst_delta = last_inst_delta.astype(dtypes["delta"])
                     delta_0 = -final_prod_jac * (final_delta - last_inst_delta)
                 else:
                     delta_0 = -final_prod_jac @ (final_delta - last_inst_delta)
@@ -290,9 +291,11 @@ class ForwardBPTTLayer(nn.Module):
                 f"log/{self.name}/norm_prod_jac": norm_prod_jac,
                 f"log/{self.name}/residual_error_delta": residual_error_delta,
                 f"log/{self.name}/norm_delta_0": jnp.linalg.norm(delta_0),
+                f"log/{self.name}/norm_delta_out": jnp.linalg.norm(out["inst_delta"]),
                 f"log/{self.name}/norm_final_delta_first_pass": jnp.linalg.norm(
                     final_delta if self.two_passes else final_carry[1]
                 ),
+                f"log/{self.name}/norm_hiddens": jnp.mean(out["h_norm"]),
                 f"log/{self.name}/max_delta_1": max_delta_1,
                 f"log/{self.name}/mean_delta_1": mean_delta_1,
                 f"log/{self.name}/min_delta_2": jnp.mean(jnp.abs(delta_h)),
