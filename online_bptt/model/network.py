@@ -125,7 +125,7 @@ class ForwardBPTTCell(nn.Module):
                 "h": carry_base_precision,
                 "delta": carry_increased_precision,  # we need higher precision here as this quantity can explode
                 "inst_delta": carry_base_precision,
-                "prod_jac": carry_base_precision,
+                "prod_jac": carry_increased_precision,  # same here
             }
         else:
             return {k: dtype for k in ["h", "delta", "inst_delta", "prod_jac"]}
