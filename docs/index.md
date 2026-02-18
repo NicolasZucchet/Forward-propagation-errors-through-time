@@ -322,16 +322,16 @@ For these reasons, we have decided to not pursue further our investigations rela
 7. Mujika, Meier & Steger, [*Approximating real-time recurrent learning with random Kronecker factors*](https://arxiv.org/abs/1805.10842), NeurIPS, 2018.
 8. Ascher & Petzold, [*Computer Methods for Ordinary Differential Equations and Differential-Algebraic Equations*](https://epubs.siam.org/doi/book/10.1137/1.9781611971392), SIAM, 1998.
 10. Orvieto et al., [*Resurrecting recurrent neural networks for long sequences*](https://arxiv.org/abs/2303.06349), ICML, 2023.
-11. Zucchet & Orvieto, [*Recurrent neural networks: vanishing and exploding gradients are not the end of the story*](https://arxiv.org/abs/2405.21064), arXiv:2405.21064, 2024.
+11. Zucchet & Orvieto, [*Recurrent neural networks: vanishing and exploding gradients are not the end of the story*](https://arxiv.org/abs/2405.21064), NeurIPS, 2024.
 12. Hochreiter & Schmidhuber, [*Long short-term memory*](https://doi.org/10.1162/neco.1997.9.8.1735), Neural Computation, 1997.
 13. Beck et al., [*xLSTM: Extended long short-term memory*](https://arxiv.org/abs/2405.04517), NeurIPS, 2024.
-14. Gu & Dao, [*Mamba: Linear-time sequence modeling with selective state spaces*](https://arxiv.org/abs/2312.00752), arXiv:2312.00752, 2023.
+14. Gu & Dao, [*Mamba: Linear-time sequence modeling with selective state spaces*](https://arxiv.org/abs/2312.00752), COLM, 2023.
 15. De et al., [*Griffin: Mixing gated linear recurrences with local attention for efficient language models*](https://arxiv.org/abs/2402.19427), arXiv:2402.19427, 2024.
 16. Yang, Kautz & Hatamizadeh, [*Gated delta networks: Improving Mamba2 with delta rule*](https://arxiv.org/abs/2412.06464), ICLR, 2025.
 17. Heinsen & Kozachkov, [*Generalized orders of magnitude for scalable, parallel, high-dynamic-range computation*](https://arxiv.org/abs/2510.03426), arXiv:2510.03426, 2025.
 18. MacKay, Vicol, Ba & Grosse, [*Reversible recurrent neural networks*](https://arxiv.org/abs/1810.10999), NeurIPS, 2018.
 19. Gomez, Ren, Urtasun & Grosse, [*The reversible residual network: Backpropagation without storing activations*](https://arxiv.org/abs/1707.04585), NeurIPS, 2017.
-20. Pourcel & Ernoult, [*Learning long range dependencies through time reversal symmetry breaking*](https://arxiv.org/abs/2506.05259), arXiv:2506.05259, 2025.
+20. Pourcel & Ernoult, [*Learning long range dependencies through time reversal symmetry breaking*](https://arxiv.org/abs/2506.05259), NeurIPS, 2025.
 21. Bai, Kolter & Koltun, [*Deep equilibrium models*](https://arxiv.org/abs/1909.01377), NeurIPS, 2019.
 
 </div>
