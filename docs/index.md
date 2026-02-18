@@ -212,7 +212,7 @@ The procedure is illustrated below.
   <figcaption>Visualization of the multi-layer forward propagation of error algorithm, along with green and red arrows indicating when exact (in green) gradient information is sent to the previous layer or to the next pass.</figcaption>
 </figure>
 
-The forward propagation of error algorithm has a memory complexity that is independent of sequence length (contrarily to BPTT) and grows quadratically with the number of hidden neurons (vs. linearly for BPTT and cubic for RTRL), with the bottleneck being the accumulation of Jacobians. The main computational challenge is the inversion of the recurrent Jacobian, although this problem would not arise in continuous time<sup class="sidenote-number">9</sup><span class="sidenote"><span class="sidenote-label">9.</span> In continuous time, the recurrent Jacobian takes the form $J_t = \mathrm{Id} + A_t \mathrm{d}t$ where $A_t$ is the dynamics' Jacobian and $\mathrm{d}t$ is the discretization step. As $\mathrm{d}t \to 0$, a first-order expansion gives $J_t^{-\top} \approx \mathrm{Id} - A_t^\top \mathrm{d}t = 2\mathrm{Id} - J_t^\top$, replacing the matrix inversion with a simple subtraction.</span>.
+The forward propagation of error algorithm has a memory complexity that is independent of sequence length (contrarily to BPTT) and grows quadratically with the number of hidden neurons (vs. linearly for BPTT and cubic for RTRL), with the bottleneck being the accumulation of Jacobians. The main computational challenges are the computation of the entire recurrent Jacobian and its inversion, although this problem would not arise in continuous time<sup class="sidenote-number">9</sup><span class="sidenote"><span class="sidenote-label">9.</span> In continuous time, the recurrent Jacobian takes the form $J_t = \mathrm{Id} + A_t \mathrm{d}t$ where $A_t$ is the dynamics' Jacobian and $\mathrm{d}t$ is the discretization step. As $\mathrm{d}t \to 0$, a first-order expansion gives $J_t^{-\top} \approx \mathrm{Id} - A_t^\top \mathrm{d}t = 2\mathrm{Id} - J_t^\top$, replacing the matrix inversion with a simple subtraction.</span>.
 
 | Algorithm | Memory | Number of passes (forward / backward) | Exact |
 | --- | --- | --- | --- |
@@ -262,7 +262,7 @@ In this section, we will consider a single layer of linear recurrent units and c
 More precisely, we vary the $r_\mathrm{min}$ factor we used in the previous section and observe how the gradient quality evolves. We find that gradient quality quickly deteriorates if $r_\mathrm{min}$ is too small, and that increasing the sequence length makes that trend even worse, cf. figure below.
 
 <figure>
-  <img src="{{ '/assets/images/grad_align_style.jpg' | relative_url }}" alt="Gradient quality vs eigenvalue magnitude">
+  <img src="{{ '/assets/images/grad_align_style.jpg' | relative_url }}" alt="Gradient quality vs eigenvalue magnitude" style="max-width: 350px;">
   <figcaption>Gradient quality of forward propagation of errors through time as a function of the minimum eigenvalue magnitude, for different sequence lengths.</figcaption>
 </figure>
 
@@ -339,9 +339,7 @@ For these reasons, we have decided to not pursue further our investigations rela
 
 ---
 
-## Appendix
-
-### Time and memory complexity
+## Appendix: Time and memory complexities
 
 We provide a more fine-grained complexity analysis of different gradient computation algorithms for recurrent neural networks. We focus on a single recurrent layer with $N$ hidden neurons for simplicity and denote, as before, the sequence length by $T$. We include reversible backpropagation through time<sup class="sidenote-number">18</sup> in this analysis, which avoids storing the full activation trajectory by reconstructing hidden states during the backward pass (exploiting the invertibility of the recurrence), as its existence is one of the main reasons we did not scale up our experiments.
 
