@@ -1,5 +1,5 @@
-title: "Forward Propagation of Errors Through Time"
-baseurl: "/Online-BPTT"
+title: "Forward propagation of errors through time"
+baseurl: "/Forward-propagation-errors-through-time"
 url: ""
 markdown: kramdown
 kramdown:
