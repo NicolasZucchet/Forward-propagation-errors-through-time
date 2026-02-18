@@ -353,7 +353,7 @@ The memory, time, and memory access complexities of each algorithm are summarize
 | Exact RTRL | $N^3$ | $N^4T$ | $N^3T$ | $1 ~ / ~ 0$ | Yes |
 | Diagonal RTRL | $N^2$ | $N^3T$ | $N^2T$ | $1 ~ / ~ 0$ | No |
 | Reversible BPTT | $N$ | $N^2T$ | $NT$ | $1 ~ / ~ 1$ | Yes |
-| FPTT | $N^2$ | $N^3T$ | $N^2T$ | $1 ~ / ~ 0$ | Yes |
+| FPTT | $N^2$ | $N^3T$ | $N^2T$ | $2 ~ / ~ 0$ | Yes |
 
 A few takeaways from this comparison:
 - All the alternatives to backpropagation through time listed above eliminate the linear scaling of memory with sequence length.
