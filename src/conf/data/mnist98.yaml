@@ -1,0 +1,12 @@
+# @package _group_
+# Downsampled version of MNIST for smaller sequences
+
+task: "mnist"
+batch_size: 64
+n_samples: 150000
+downsampling_factor: 8
+# don't touch the following
+n_classes: 10
+classification: true
+multiple_pred_per_timestep: false
+dense_prediction: false

@@ -210,3 +210,6 @@ __marimo__/
 uv.lock
 outputs/
 wandb/
+analysis/cache/
+docs/_site/
+docs/Gemfile.lock

@@ -7,12 +7,11 @@ import flax.linen as nn
 from typing import Callable, Any
 from functools import partial
 from omegaconf import DictConfig
-from online_bptt.model.cells import (
+from src.model.cells import (
     GRUCell,
     LRUCell,
-    EUNNCell,
 )
-from online_bptt.model.network import RNN
+from src.model.network import RNN
 
 
 def parameter_conversion_normal_to_forward(params, example_params):
@@ -68,15 +67,6 @@ def create_model(
             norm_before_readout=cfg.model.norm_before_readout,
             freeze_recurrence=cfg.model.freeze_recurrence,
             dtype=base_precision,
-        )
-    elif cfg.model.cell == "eunn":
-        cell_type = partial(
-            EUNNCell,
-            norm_before_readout=cfg.model.norm_before_readout,
-            freeze_recurrence=cfg.model.freeze_recurrence,
-            dtype=base_precision,
-            n_layers=getattr(cfg.model, "eunn_n_layers", 4),
-            nonlinearity=getattr(cfg.model, "eunn_nonlinearity", "none"),
         )
     else:
         raise ValueError(f"Unknown cell type: {cfg.model.cell}")

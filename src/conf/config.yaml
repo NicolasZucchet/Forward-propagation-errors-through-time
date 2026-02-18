@@ -1,0 +1,34 @@
+defaults:
+  - data: copy
+  - _self_
+
+seed: 42
+
+model:
+  n_layers: 1
+  cell: "gru" # "gru" or "lru"
+  lru_r_min: 0.0
+  lru_r_max: 1.0
+  training_mode: "normal"
+  approx_inverse: false  # For forward BPTT
+  hidden_dim: 64
+  base_precision: "float32"
+  increased_precision: "float64"
+  T_min_frac: 1.0
+  T_max_frac: 2.0
+  norm_before_readout: true
+  pooling: "none"
+  unroll: 1
+  freeze_recurrence: false
+  forward_simulation_passes:  # default is None
+
+training:
+  optimizer: "adamw"
+  weight_decay: 0.01
+  scheduler: "cosine"
+  learning_rate: 3e-4
+  recurrent_lr_factor: 1
+  log_every_steps: 20
+  eval_frequency: 1000
+  gradient_clipping: 1.0
+  wandb_log: true

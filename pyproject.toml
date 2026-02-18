@@ -1,12 +1,14 @@
 [project]
 name = "online-bptt"
 version = "0.1.0"
-description = "Add your description here"
+description = "Forward propagation of errors through time for recurrent neural networks"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "flax==0.8.4",
-    "jax[cuda12]==0.4.26",
+    "jax[cuda12]==0.4.26; sys_platform == 'linux'",
+    "jax==0.4.26; sys_platform == 'darwin'",
+    "jax-metal; sys_platform == 'darwin'",
     "optax==0.2.2",
     "pytest>=8.4.1",
     "omegaconf",
@@ -18,5 +20,5 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["online_bptt"]
+packages = ["src"]
 

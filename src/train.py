@@ -6,24 +6,14 @@ import optax
 from flax.training import train_state
 import flax.linen as nn
 from flax import traverse_util
-from flax import traverse_util
-from flax import traverse_util
-from flax import traverse_util
-from flax import traverse_util
-from flax import traverse_util
-from flax import traverse_util
-from flax import traverse_util
-from flax import traverse_util
 from tqdm import tqdm
 from functools import partial
 import wandb
-from flax.core import freeze
-from flax import traverse_util
 
-from online_bptt.data import create_dataloaders
-from online_bptt.model_factory import create_model
-from online_bptt import metrics
-from online_bptt.utils import get_logger
+from src.data import create_dataloaders
+from src.model_factory import create_model
+from src import metrics
+from src.utils import get_logger
 
 
 logger = get_logger()
@@ -58,7 +48,7 @@ def eval_step(model, loss_fn, acc_fn, state, batch):
     return {"loss": loss, "acc": acc}
 
 
-@hydra.main(config_path="../conf", config_name="config")
+@hydra.main(config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
     key = jax.random.PRNGKey(cfg.seed)
 
@@ -135,15 +125,15 @@ def main(cfg: DictConfig) -> None:
     else:
         raise ValueError(f"Unknown scheduler: {cfg.training.scheduler}")
     optimizer_name = cfg.training.get("optimizer", "adam")
+
+    def label_fn(path, _):
+        if any(s in path for s in ["B", "nu_log", "theta_log"]):
+            return "recurrent"
+        return "non_recurrent"
+
+    param_labels = traverse_util.path_aware_map(label_fn, params)
+
     if optimizer_name == "adamw":
-        # We apply weight decay only to non recurrent parameters
-        def label_fn(path, _):
-            if any(s in path for s in ["B", "nu_log", "theta_log", "theta", "phi", "diag_phase"]):
-                return "recurrent"
-            return "non_recurrent"
-
-        param_labels = traverse_util.path_aware_map(label_fn, params)
-
         optimizer = optax.chain(
             optax.clip_by_global_norm(cfg.training.gradient_clipping),
             optax.multi_transform(

@@ -1,0 +1,13 @@
+# @package _group_
+
+task: "copy"
+batch_size: 4
+n_samples: 64
+seq_len: 4
+bit_width: 1
+n_classes: 1  # must match the bit width
+waiting_time: 4
+# don't touch the following
+classification: true
+multiple_pred_per_timestep: true
+dense_prediction: true

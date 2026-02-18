@@ -10,7 +10,7 @@ from .model.network import (
     RNN,
 )
 from .model_factory import parameter_conversion_normal_to_forward
-from .model.cells import GRUCell, EUNNCell, LRUCell
+from .model.cells import GRUCell, LRUCell
 from .utils import check_grad_all
 
 dtype = jnp.float64
@@ -36,7 +36,7 @@ def setup_data():
     return key, input_dim, hidden_dim, output_dim, seq_len
 
 
-@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell, EUNNCell])
+@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell])
 def test_forward_bptt_cell_single_step(setup_data, cell_class):
     key, input_dim, hidden_dim, output_dim, _ = setup_data
 
@@ -65,7 +65,7 @@ def test_forward_bptt_cell_single_step(setup_data, cell_class):
     assert "output" in out
 
 
-@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell, EUNNCell])
+@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell])
 def test_forward_bptt_rnn_sequence(setup_data, cell_class):
     key, input_dim, hidden_dim, output_dim, seq_len = setup_data
     key = random.PRNGKey(42)
@@ -86,7 +86,7 @@ def test_forward_bptt_rnn_sequence(setup_data, cell_class):
     assert outputs.shape == (seq_len, output_dim)
 
 
-@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell, EUNNCell])
+@pytest.mark.parametrize("cell_class", [GRUCell, LRUCell])
 def test_forward_bptt_rnn_backward_pass(setup_data, cell_class):
     key, input_dim, hidden_dim, output_dim, seq_len = setup_data
     key = random.PRNGKey(42)
@@ -110,7 +110,8 @@ def test_forward_bptt_rnn_backward_pass(setup_data, cell_class):
     standard_rnn = rnn_func(training_mode="normal")
 
     standard_params = standard_rnn.init(key, dummy_inputs)
-    params = parameter_conversion_normal_to_forward(standard_params)
+    example_params = forward_bptt_rnn.init(key, dummy_inputs)
+    params = parameter_conversion_normal_to_forward(standard_params, example_params)
 
     def loss_fn(model, p, b):
         y_hat = model.apply(p, b["input"])
@@ -132,35 +133,3 @@ def test_forward_bptt_rnn_backward_pass(setup_data, cell_class):
     )
 
 
-def test_eunn_perm_preserves_norm_one_step_no_input():
-    key = random.PRNGKey(0)
-    input_dim = 4
-    hidden_dim = 8  # even for clean pairing
-    output_dim = 1
-
-    # Build the cell (float64 for tighter numeric tolerance)
-    cell = EUNNCell(
-        hidden_dim=hidden_dim,
-        output_dim=output_dim,
-        n_layers=4,
-        dtype=dtype,
-    )
-
-    # Initialize parameters for the specific method to avoid running full __call__
-    v0 = jnp.zeros((hidden_dim,), dtype=jnp.complex128)
-    params = cell.init(key, v0, method=EUNNCell._apply_layers_vec)
-
-    # Random complex hidden state
-    k1, k2 = random.split(key)
-    h_real = random.normal(k1, (hidden_dim,), dtype=dtype)
-    h_imag = random.normal(k2, (hidden_dim,), dtype=dtype)
-    h = (h_real + 1j * h_imag).astype(jnp.complex128)
-
-    # Apply one unitary recurrence step without input contribution via internal vector transform
-    h_next = cell.apply(params, h, method=EUNNCell._apply_layers_vec)
-
-    # Norm should be preserved
-    norm_h = jnp.linalg.norm(h)
-    norm_h_next = jnp.linalg.norm(h_next)
-    print(norm_h, norm_h_next)
-    assert jnp.allclose(norm_h_next, norm_h, rtol=1e-9, atol=1e-9)

@@ -2,9 +2,9 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 from typing import Tuple, Callable, Any
-from online_bptt.model.cells import GRUCell, LRUCell, cumulative_mean_pooling
+from src.model.cells import GRUCell, LRUCell, cumulative_mean_pooling
 from functools import partial
-from online_bptt.utils import get_logger
+from src.utils import get_logger
 
 logger = get_logger()
 

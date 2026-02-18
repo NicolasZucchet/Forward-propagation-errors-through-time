@@ -1,0 +1,379 @@
+/* Distill-inspired styling with sidenotes */
+
+:root {
+  --text-color: #2d2a23;
+  --accent-color: #8d5d45;
+  --bg-color: rgb(255, 252, 246);
+  --surface-color: #fcf7eb;
+  --meta-color: #888;
+  --sidenote-color: #555;
+  --border-color: #d9d4c8;
+  --code-bg: #f3f0e8;
+  --content-width: 800px;
+  --sidenote-width: 250px;
+  --sidenote-gap: 30px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--text-color);
+  background: var(--bg-color);
+  line-height: 1.7;
+  font-size: 17px;
+  -webkit-font-smoothing: antialiased;
+}
+
+article.post {
+  max-width: var(--content-width);
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+/* Shift content left on wide screens to make room for sidenotes */
+@media (min-width: 1100px) {
+  article.post {
+    margin-left: max(2rem, calc(50% - 510px));
+    margin-right: auto;
+  }
+}
+
+header {
+  margin-bottom: 2.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.post-title {
+  font-size: 2.2rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 0.5rem;
+}
+
+.post-authors {
+  font-size: 1.1rem;
+  color: var(--meta-color);
+  margin-bottom: 0.25rem;
+}
+
+.post-affiliations {
+  font-size: 0.9rem;
+  color: var(--meta-color);
+  margin-bottom: 0.25rem;
+}
+
+.post-date {
+  font-size: 0.95rem;
+  color: var(--meta-color);
+}
+
+.github-link {
+  display: inline-block;
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  color: var(--meta-color);
+  text-decoration: none;
+}
+
+.github-link:hover {
+  color: var(--accent-color);
+}
+
+/* Equation references */
+.MathJax a {
+  fill: var(--accent-color) !important;
+}
+
+/* Table of Contents */
+.toc {
+  background: var(--surface-color);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 0.75rem 1.25rem;
+  margin: 0.25rem 0 1.5rem;
+}
+
+.toc h2 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  margin-top: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-color);
+}
+
+.toc ol {
+  list-style: decimal;
+  padding-left: 1.25rem;
+  margin: 0;
+  color: var(--accent-color);
+}
+
+.toc ol ol {
+  list-style: lower-alpha;
+  padding-left: 1.25rem;
+  margin-top: 0.15rem;
+}
+
+.toc li {
+  margin-bottom: 0.2rem;
+  font-size: 1.1rem;
+  line-height: 1.5;
+}
+
+.toc a {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.toc a:hover {
+  text-decoration: underline;
+}
+
+/* Post Content */
+.post-content h2 {
+  font-size: 1.7rem;
+  font-weight: 700;
+  margin-top: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.post-content h3 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.post-content p {
+  margin-bottom: 1.2rem;
+}
+
+.post-content strong {
+  font-weight: 700;
+  color: var(--accent-color);
+}
+
+.post-content a {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.post-content a:hover {
+  text-decoration: underline;
+}
+
+.post-content blockquote {
+  border-left: 3px solid var(--accent-color);
+  padding: 0.75rem 1.25rem;
+  margin: 1.5rem 0;
+  background: var(--surface-color);
+  font-style: normal;
+}
+
+.post-content blockquote strong {
+  display: block;
+  margin-bottom: 0.3rem;
+}
+
+.post-content hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 2rem 0;
+}
+
+.post-content figure {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+.post-content figure img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+
+.post-content figcaption {
+  font-size: 0.9rem;
+  color: var(--meta-color);
+  margin-top: 0.5rem;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+.post-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+  font-size: 0.95rem;
+}
+
+.post-content th,
+.post-content td {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.post-content th {
+  background: var(--surface-color);
+  font-weight: 600;
+}
+
+.post-content ol,
+.post-content ul {
+  margin-bottom: 1.2rem;
+  padding-left: 1.5rem;
+}
+
+.post-content li {
+  margin-bottom: 0.3rem;
+}
+
+.post-content code {
+  background: var(--code-bg);
+  padding: 0.15rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+/* Sidenotes (Distill-style) */
+.sidenote-number {
+  color: var(--accent-color);
+  font-weight: 600;
+  cursor: default;
+}
+
+.sidenote {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--sidenote-color);
+  vertical-align: baseline;
+}
+
+.sidenote .sidenote-label {
+  font-weight: 600;
+  color: var(--accent-color);
+  margin-right: 0.1em;
+}
+
+.sidenote a {
+  color: var(--accent-color);
+  text-decoration: none;
+}
+
+.sidenote a:hover {
+  text-decoration: underline;
+}
+
+/* Wide screens: sidenotes in right margin */
+@media (min-width: 1100px) {
+  .sidenote {
+    float: right;
+    clear: right;
+    margin-right: -280px;
+    width: 250px;
+    margin-top: 0.2rem;
+    margin-bottom: 1rem;
+    display: block;
+  }
+}
+
+/* Narrow screens: hide inline sidenotes, show collected references */
+@media (max-width: 1099px) {
+  .sidenote {
+    display: none;
+  }
+}
+
+/* Mobile references section: hidden on wide screens */
+.mobile-references {
+  display: none;
+}
+
+@media (max-width: 1099px) {
+  .mobile-references {
+    display: block;
+    margin-top: 2.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .mobile-references h2 {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+  }
+
+  .mobile-references ol {
+    padding-left: 1.5rem;
+    font-size: 0.88rem;
+    line-height: 1.6;
+  }
+
+  .mobile-references li {
+    margin-bottom: 0.4rem;
+  }
+
+  .mobile-references a {
+    color: var(--accent-color);
+    text-decoration: none;
+  }
+
+  .mobile-references a:hover {
+    text-decoration: underline;
+  }
+}
+
+/* Notion-style mini TOC — large screens only */
+.mini-toc {
+  display: none;
+}
+
+@media (min-width: 1400px) {
+  .mini-toc {
+    display: block;
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    left: 1rem;
+    width: 140px;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    border-left: 2px solid var(--border-color);
+    padding-left: 0.6rem;
+  }
+
+  .mini-toc a {
+    display: block;
+    color: var(--meta-color);
+    text-decoration: none;
+    padding: 0.2rem 0;
+    transition: color 0.15s;
+  }
+
+  .mini-toc a:hover {
+    color: var(--text-color);
+  }
+
+  .mini-toc a.active {
+    color: var(--accent-color);
+    font-weight: 600;
+  }
+}
+
+@media (max-width: 600px) {
+  article.post {
+    padding: 1.5rem 1rem 3rem;
+  }
+  .post-title {
+    font-size: 1.6rem;
+  }
+}
