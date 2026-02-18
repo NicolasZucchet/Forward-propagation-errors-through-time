@@ -1,6 +1,6 @@
 # Online-BPTT
 
-This repository accompanies the blog post [Forward Propagation of Errors Through Time](https://nzucchet.github.io/Online-BPTT/). We investigate whether backpropagation through time (BPTT) can be replaced by an exact forward-mode algorithm for training recurrent neural networks. The code implements the Forward Propagation of Errors Through Time (FPTT) algorithm and reproduces all experiments described in the post.
+This repository accompanies the blog post [Forward propagation of errors through time](https://nicolaszucchet.github.io/Forward-propagation-errors-through-time/). We investigate whether backpropagation through time (BPTT) can be replaced by an exact forward-mode algorithm for training recurrent neural networks. The code implements the Forward Propagation of Errors Through Time (FPTT) algorithm and reproduces all experiments described in the post.
 
 ## Setup
 
